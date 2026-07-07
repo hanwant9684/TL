@@ -2883,18 +2883,17 @@ def chat_date_range(chat_id):
 
     async def _do(client):
         newest = oldest = None
-        # Newest: first message returned by default (newest-first order)
+        # Newest: first message in default history order
         async for m in client.get_chat_history(chat_id_int, limit=1):
             newest = m.date.isoformat()
             break
-        # Oldest: offset=-1 tells Telegram to return the very first message in the chat
+        # Oldest: use offset_id=1 trick — fetch 1 msg starting from the very beginning
         try:
-            async for m in client.get_chat_history(chat_id_int, limit=1, offset=-1):
+            async for m in client.get_chat_history(chat_id_int, limit=1, offset_id=1, offset=-1):
                 oldest = m.date.isoformat()
                 break
         except Exception:
             pass
-        # Fallback: if offset=-1 didn't work (some chat types), oldest stays None
         return {"newest": newest, "oldest": oldest}
 
     try:
