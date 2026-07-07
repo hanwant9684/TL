@@ -2596,15 +2596,28 @@ def _build_export_html(messages, chat_name, media_map, generated_at):
             lines.append('<div class="msg-media">')
             if msg_id in media_map:
                 mpath = media_map[msg_id]
+                # Browsers block data: URI navigation in target="_blank".
+                # Detect embedded URIs and use the download attribute instead.
+                is_embedded = mpath.startswith("data:")
+                safe_mpath = _html_escape(mpath)
                 if mtype == "photo":
-                    lines.append(f'<a href="{_html_escape(mpath)}" target="_blank"><img src="{_html_escape(mpath)}" alt="photo" loading="lazy"></a>')
+                    if is_embedded:
+                        dl_name = _html_escape(fname or f"photo_{msg_id}.jpg")
+                        lines.append(f'<a href="{safe_mpath}" download="{dl_name}" title="Click to download"><img src="{safe_mpath}" alt="photo" style="cursor:pointer;max-width:100%;max-height:400px;display:block;border-radius:8px"></a>')
+                    else:
+                        lines.append(f'<a href="{safe_mpath}" target="_blank"><img src="{safe_mpath}" alt="photo" loading="lazy"></a>')
                 elif mtype in ("video", "animation", "video_note"):
-                    lines.append(f'<video src="{_html_escape(mpath)}" controls preload="none"></video>')
+                    lines.append(f'<video src="{safe_mpath}" controls preload="none" style="max-width:100%;max-height:300px;display:block;border-radius:8px"></video>')
                 elif mtype in ("audio", "voice"):
-                    lines.append(f'<audio src="{_html_escape(mpath)}" controls></audio>')
+                    lines.append(f'<audio src="{safe_mpath}" controls style="width:100%;margin-top:4px"></audio>')
                 else:
-                    display_name = fname or mpath.split("/")[-1]
-                    lines.append(f'<a href="{_html_escape(mpath)}" target="_blank" style="text-decoration:none;display:block"><div class="media-placeholder" style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background=\'rgba(82,136,193,0.15)\'" onmouseout="this.style.background=\'\'"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div><div style="font-size:0.65rem;color:#5288c1;margin-top:2px">click to open ↗</div></div></div></a>')
+                    if is_embedded:
+                        display_name = fname or f"file_{msg_id}"
+                        dl_name = _html_escape(fname or f"file_{msg_id}")
+                        lines.append(f'<a href="{safe_mpath}" download="{dl_name}" style="text-decoration:none;display:block"><div class="media-placeholder" style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background=\'rgba(82,136,193,0.15)\'" onmouseout="this.style.background=\'\'"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div><div style="font-size:0.65rem;color:#5288c1;margin-top:2px">click to download ↓</div></div></div></a>')
+                    else:
+                        display_name = fname or mpath.split("/")[-1]
+                        lines.append(f'<a href="{safe_mpath}" target="_blank" style="text-decoration:none;display:block"><div class="media-placeholder" style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background=\'rgba(82,136,193,0.15)\'" onmouseout="this.style.background=\'\'"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div><div style="font-size:0.65rem;color:#5288c1;margin-top:2px">click to open ↗</div></div></div></a>')
             else:
                 display_name = fname or mtype.upper()
                 size_part = f'<div class="media-size">{_html_escape(fsize)}</div>' if fsize else ''
