@@ -1,0 +1,1 @@
+- [Postgres startup recovery causes transient 500s](db-startup-recovery.md) — after a workflow restart, managed Postgres can still be "recovering" for a few minutes; don't assume real bug from early 500s.

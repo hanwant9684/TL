@@ -1,0 +1,2041 @@
+import os
+import uuid
+import math
+import time
+import asyncio
+import concurrent.futures
+import threading
+import logging
+from functools import wraps
+from datetime import timedelta, datetime
+import base64
+
+import requests as _http
+from flask import Flask, render_template, request, jsonify, redirect, url_for, session, send_file, Response
+from flask_sqlalchemy import SQLAlchemy
+
+# ── Translation ───────────────────────────────────────────────────────────────
+# Chain: Groq AI → Gemini → Google Translate (unofficial, no key)
+
+_AI_SYSTEM_PROMPT = (
+    "You are an expert multilingual translator specializing in informal, slang-heavy text. "
+    "Translate the given text into the specified target language.\n\n"
+    "RULES:\n"
+    "1. Translate ALL content including vulgar, explicit, offensive, or sexual words — NEVER censor.\n"
+    "2. Understand slang and Gen-Z language from any language:\n"
+    "   - Indonesian: gw/gue=I, lo/lu=you, gabut=bored, anjir/anjg/anjing=damn/fuck, "
+    "wkwk=lol, mager=lazy, baper=emotional, kepo=nosy, mantul=awesome, gasken=let's go, "
+    "cok/cuk=dude(vulgar), kontol=dick(vulgar), ngab=bro, "
+    "yg=yang, dgn=dengan, krn=karena, jg=juga, tp=tapi, udh/udah=sudah, blm=belum, "
+    "hrs=harus, sm=sama, dl=dulu, emg=emang, bntr=bentar, kyk=kayak, gak/ngga/nggak=tidak\n"
+    "   - English Gen-Z: lowkey, highkey, bussin, no cap, fr fr, slay, sus, goated, bet, rizz\n"
+    "   - Hindi: yaar=friend, bhai=brother, bindaas=carefree, jugaad=hack\n"
+    "3. Handle code-switching (mixed languages) naturally.\n"
+    "4. If already in target language, return as-is.\n"
+    "5. Return ONLY the translation — no notes, no quotes, no explanation."
+)
+
+def _try_groq(text, target_name):
+    key = os.environ.get("GROQ_API_KEY", "").strip()
+    if not key:
+        return None
+    try:
+        resp = _http.post(
+            "https://api.groq.com/openai/v1/chat/completions",
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={
+                "model": "llama-3.1-8b-instant",
+                "messages": [
+                    {"role": "system", "content": _AI_SYSTEM_PROMPT},
+                    {"role": "user", "content": f"Translate to {target_name}:\n{text}"}
+                ],
+                "temperature": 0.3,
+                "max_tokens": 1024
+            },
+            timeout=20
+        )
+        if resp.status_code == 200:
+            result = resp.json()["choices"][0]["message"]["content"].strip()
+            return result if result else None
+        if resp.status_code in (429, 503):
+            return None
+    except Exception:
+        pass
+    return None
+
+def _try_gemini(text, target_name):
+    key = os.environ.get("GEMINI_API_KEY", "").strip()
+    if not key:
+        return None
+    prompt = f"{_AI_SYSTEM_PROMPT}\n\nTranslate to {target_name}:\n{text}"
+    payload = {"contents": [{"parts": [{"text": prompt}]}]}
+    headers = {"Content-Type": "application/json"}
+    for model in ("gemini-2.0-flash", "gemini-2.0-flash-lite"):
+        url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
+               f"{model}:generateContent?key={key}")
+        try:
+            resp = _http.post(url, json=payload, headers=headers, timeout=20)
+            if resp.status_code == 200:
+                return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
+            if resp.status_code in (429, 503):
+                continue
+        except Exception:
+            pass
+    return None
+
+def _try_google_translate(text, target_lang):
+    try:
+        resp = _http.get(
+            "https://translate.googleapis.com/translate_a/single",
+            params={"client": "gtx", "sl": "auto", "tl": target_lang, "dt": "t", "q": text},
+            timeout=10
+        )
+        if resp.status_code == 200:
+            data = resp.json()
+            result = "".join(part[0] for part in data[0] if part[0])
+            if result and result.lower().strip() != text.lower().strip():
+                return result
+    except Exception:
+        pass
+    return None
+
+def translate_with_fallback(text, target_lang, target_name):
+    result = _try_groq(text, target_name)
+    if result:
+        return result, "Groq AI"
+
+    result = _try_gemini(text, target_name)
+    if result:
+        return result, "Gemini"
+
+    result = _try_google_translate(text, target_lang)
+    if result:
+        return result, "Google Translate"
+
+    raise ValueError("All translation engines unavailable. Try again later.")
+
+# ── App setup ─────────────────────────────────────────────────────────────────
+
+DOWNLOADS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_downloads")
+PRESERVED_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preserved_media")
+os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+os.makedirs(PRESERVED_DIR, exist_ok=True)
+
+download_queue = {}
+
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+
+# ── Rotating file handler — writes to logs/app.log, keeps last 5 × 5 MB ──────
+import os as _os
+from logging.handlers import RotatingFileHandler as _RotatingFileHandler
+_LOGS_DIR = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "logs")
+_os.makedirs(_LOGS_DIR, exist_ok=True)
+_file_handler = _RotatingFileHandler(
+    _os.path.join(_LOGS_DIR, "app.log"),
+    maxBytes=5 * 1024 * 1024,   # 5 MB per file
+    backupCount=5,               # keep app.log + 5 rotated backups = 30 MB max
+    encoding="utf-8",
+)
+_file_handler.setLevel(logging.DEBUG)
+_file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+
+logging.basicConfig(
+    level=logging.INFO,
+    format=LOG_FORMAT,
+    handlers=[logging.StreamHandler(), _file_handler]
+)
+# basicConfig is a no-op if any handlers already exist on the root logger,
+# so attach the file handler explicitly to guarantee it always runs.
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+if _file_handler not in _root_logger.handlers:
+    _root_logger.addHandler(_file_handler)
+if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, _RotatingFileHandler)
+           for h in _root_logger.handlers):
+    _root_logger.addHandler(logging.StreamHandler())
+logger = logging.getLogger(__name__)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
+logging.getLogger("werkzeug").setLevel(logging.WARNING)
+
+# ── In-memory log buffer (last 500 entries) — readable from /api/logs ─────────
+import collections
+_LOG_BUFFER_SIZE = 500
+_log_buffer = collections.deque(maxlen=_LOG_BUFFER_SIZE)
+
+class _BufferHandler(logging.Handler):
+    """Appends every log record from our app logger into _log_buffer."""
+    def emit(self, record):
+        try:
+            _log_buffer.append({
+                "ts":    self.formatTime(record, "%Y-%m-%d %H:%M:%S"),
+                "level": record.levelname,
+                "name":  record.name,
+                "msg":   record.getMessage(),
+            })
+        except Exception:
+            pass
+
+_buf_handler = _BufferHandler()
+_buf_handler.setLevel(logging.DEBUG)
+logging.getLogger(__name__).addHandler(_buf_handler)
+# Also capture root-level app logs (werkzeug excluded above)
+logging.getLogger().addHandler(_buf_handler)
+
+try:
+    asyncio.get_event_loop()
+except RuntimeError:
+    asyncio.set_event_loop(asyncio.new_event_loop())
+
+from pyrogram import Client, filters as pyro_filters
+
+app = Flask(__name__, static_folder='static', template_folder='templates')
+app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-secrets")
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
+
+telegram_clients = {}
+
+# ── DB ────────────────────────────────────────────────────────────────────────
+
+_db_url = os.environ.get("DATABASE_URL", "sqlite:///app.db")
+if _db_url.startswith("postgres://"):
+    _db_url = _db_url.replace("postgres://", "postgresql://", 1)
+app.config['SQLALCHEMY_DATABASE_URI'] = _db_url
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+if _db_url.startswith("postgresql"):
+    # pool_pre_ping: validates a connection with a cheap SELECT 1 before handing
+    # it to a request, so stale/dropped connections (e.g. after the DB restarts
+    # or recycles) are silently replaced instead of surfacing as a 500.
+    # pool_recycle: proactively retires connections older than 5 min, matching
+    # typical managed-Postgres idle/connection limits.
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        "pool_pre_ping": True,
+        "pool_recycle": 300,
+        "connect_args": {"connect_timeout": 5},
+    }
+
+db = SQLAlchemy(app)
+
+def _db_is_transient_error(exc):
+    """True if exc looks like a transient DB connectivity issue (DB still
+    booting/recovering, connection dropped, etc.) rather than a real bug."""
+    from sqlalchemy.exc import OperationalError, DBAPIError
+    return isinstance(exc, (OperationalError, DBAPIError))
+
+class MessageStore(db.Model):
+    id         = db.Column(db.Integer, primary_key=True)
+    message_id = db.Column(db.BigInteger)
+    chat_id    = db.Column(db.BigInteger)
+    user_id    = db.Column(db.BigInteger)
+    text       = db.Column(db.Text)
+    date       = db.Column(db.DateTime)
+
+class PreservedMedia(db.Model):
+    id               = db.Column(db.Integer, primary_key=True)
+    session_key      = db.Column(db.String(32), nullable=False, index=True)
+    chat_id          = db.Column(db.BigInteger, nullable=False)
+    message_id       = db.Column(db.BigInteger, nullable=False)
+    file_path        = db.Column(db.Text)
+    file_name        = db.Column(db.String(512))
+    file_size        = db.Column(db.BigInteger)
+    media_type       = db.Column(db.String(32))
+    reason           = db.Column(db.String(32))   # view_once / protected / secret
+    saved_at         = db.Column(db.DateTime, default=datetime.utcnow)
+    original_deleted = db.Column(db.Boolean, default=False)
+    file_data        = db.Column(db.LargeBinary)  # binary copy stored in DB — survives redeploys
+
+class ProtectedChat(db.Model):
+    id          = db.Column(db.Integer, primary_key=True)
+    session_key = db.Column(db.String(32), nullable=False)
+    chat_id     = db.Column(db.BigInteger, nullable=False)
+
+class ServerDownload(db.Model):
+    """Persists server-side downloads so files survive redeploys."""
+    id          = db.Column(db.Integer, primary_key=True)
+    download_id = db.Column(db.String(16), unique=True, nullable=False, index=True)
+    session_key = db.Column(db.String(32), nullable=False)
+    chat_id     = db.Column(db.BigInteger, nullable=False)
+    message_id  = db.Column(db.BigInteger, nullable=False)
+    file_name   = db.Column(db.String(512))
+    file_path   = db.Column(db.String(1024))
+    file_size   = db.Column(db.BigInteger)
+    file_data   = db.Column(db.LargeBinary)
+    created_at  = db.Column(db.DateTime, default=datetime.utcnow)
+    status      = db.Column(db.String(16), default="queued")
+    error       = db.Column(db.Text)
+
+class StoredSession(db.Model):
+    """Persists Telegram session strings so clients stay connected across restarts."""
+    id               = db.Column(db.Integer, primary_key=True)
+    session_key      = db.Column(db.String(32), unique=True, nullable=False, index=True)
+    session_string   = db.Column(db.Text, nullable=False)
+    label            = db.Column(db.String(256))
+    created_at       = db.Column(db.DateTime, default=datetime.utcnow)
+    last_seen        = db.Column(db.DateTime, default=datetime.utcnow)
+    reconnect_failed = db.Column(db.Boolean, default=False)
+
+def _wait_for_db_ready(max_attempts=8, base_delay=1.5):
+    """Managed Postgres can still be finishing its own recovery/startup when
+    this app boots (e.g. right after a workflow restart), which raises
+    OperationalError until it's ready. Retry with backoff instead of letting
+    the very first request after boot crash with a raw 500."""
+    from sqlalchemy import text
+    for attempt in range(1, max_attempts + 1):
+        try:
+            with db.engine.connect() as _conn:
+                _conn.execute(text("SELECT 1"))
+            return True
+        except Exception as e:
+            if attempt == max_attempts:
+                logger.warning(f"DB not ready after {max_attempts} attempts: {e}")
+                return False
+            delay = base_delay * attempt
+            logger.warning(f"DB not ready yet (attempt {attempt}/{max_attempts}): {e}. Retrying in {delay:.1f}s...")
+            time.sleep(delay)
+    return False
+
+with app.app_context():
+    _wait_for_db_ready()
+    db.create_all()
+    # Runtime migration: add any new columns to existing tables
+    try:
+        from sqlalchemy import text
+        with db.engine.connect() as _conn:
+            for _stmt in [
+                "ALTER TABLE preserved_media ADD COLUMN IF NOT EXISTS file_data bytea",
+                "ALTER TABLE stored_session ADD COLUMN IF NOT EXISTS reconnect_failed boolean DEFAULT false",
+                "ALTER TABLE server_download ADD COLUMN IF NOT EXISTS file_data bytea",
+            ]:
+                try:
+                    _conn.execute(text(_stmt))
+                except Exception:
+                    pass
+            _conn.commit()
+    except Exception as _me:
+        logger.warning(f"Migration note: {_me}")
+
+# ── Telegram config ───────────────────────────────────────────────────────────
+
+API_ID      = int(os.environ.get("API_ID", "12345"))
+API_HASH    = os.environ.get("API_HASH", "your_api_hash_here")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "password123")
+
+def format_file_size(size_bytes):
+    if not size_bytes or size_bytes <= 0:
+        return "0 B"
+    units = ("B", "KB", "MB", "GB", "TB", "PB")
+    i = min(int(math.floor(math.log(size_bytes, 1024))), len(units) - 1)
+    p = math.pow(1024, i)
+    s = round(size_bytes / p, 2)
+    return f"{s} {units[i]}"
+
+def get_proxy_config():
+    ptype = os.environ.get("PROXY_TYPE", "").lower()
+    host  = os.environ.get("PROXY_HOST", "")
+    port  = int(os.environ.get("PROXY_PORT", "0") or "0")
+    if not ptype or not host or not port:
+        return None
+    proxy = {"scheme": ptype, "hostname": host, "port": port}
+    if os.environ.get("PROXY_USER") and os.environ.get("PROXY_PASS"):
+        proxy["username"] = os.environ.get("PROXY_USER")
+        proxy["password"] = os.environ.get("PROXY_PASS")
+    return proxy
+
+_PRESERVE_EXT = {
+    "photo": ".jpg", "video": ".mp4", "audio": ".mp3",
+    "voice": ".ogg", "animation": ".mp4", "sticker": ".webp",
+    "video_note": ".mp4", "document": ".bin",
+}
+
+async def _auto_preserve(client, msg, session_key):
+    """Download and record media that should be preserved (view-once or protected chat)."""
+    if not msg or not msg.media:
+        return
+    media_type = msg.media.value if msg.media else None
+    if not media_type or media_type not in _PRESERVE_EXT:
+        return
+
+    media_obj = getattr(msg, media_type, None)
+    chat_id   = msg.chat.id if msg.chat else None
+    if not chat_id:
+        return
+
+    # Detect view-once (ttl_seconds set on the media object)
+    is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
+
+    # Check if chat is protected
+    with app.app_context():
+        is_protected = ProtectedChat.query.filter_by(
+            session_key=session_key, chat_id=chat_id
+        ).first() is not None
+        # Skip if already preserved
+        if PreservedMedia.query.filter_by(
+            session_key=session_key, chat_id=chat_id, message_id=msg.id
+        ).first():
+            return
+
+    if not is_view_once and not is_protected:
+        return
+
+    reason = "view_once" if is_view_once else "protected"
+    raw_name = getattr(media_obj, 'file_name', None)
+    if not raw_name:
+        raw_name = f"{media_type}_{msg.id}{_PRESERVE_EXT.get(media_type, '.bin')}"
+    safe_name = f"{session_key[:8]}_{chat_id}_{msg.id}_{raw_name}"
+    dest = os.path.join(PRESERVED_DIR, safe_name)
+
+    try:
+        downloaded = await asyncio.wait_for(
+            client.download_media(msg, file_name=dest),
+            timeout=90
+        )
+        if downloaded and os.path.exists(downloaded):
+            size = os.path.getsize(downloaded)
+            # Read bytes into DB so the file survives redeploys
+            try:
+                with open(downloaded, "rb") as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                file_bytes = None
+            with app.app_context():
+                db.session.add(PreservedMedia(
+                    session_key      = session_key,
+                    chat_id          = chat_id,
+                    message_id       = msg.id,
+                    file_path        = downloaded,
+                    file_name        = raw_name,
+                    file_size        = size,
+                    media_type       = media_type,
+                    reason           = reason,
+                    saved_at         = msg.date or datetime.utcnow(),
+                    original_deleted = False,
+                    file_data        = file_bytes,
+                ))
+                db.session.commit()
+            logger.info(f"Preserved [{reason}] {raw_name} ({format_file_size(size)})")
+    except Exception as e:
+        logger.error(f"_auto_preserve failed for msg {msg.id}: {e}")
+
+
+def create_telegram_client(session_string):
+    session_key = session_string[:16]
+    client = Client(
+        name=f"session_{hash(session_string)}",
+        session_string=session_string,
+        api_id=API_ID,
+        api_hash=API_HASH,
+        proxy=get_proxy_config(),
+        in_memory=True
+    )
+
+    @client.on_message()
+    async def log_message(c, m):
+        try:
+            with app.app_context():
+                db.session.add(MessageStore(
+                    message_id=m.id,
+                    chat_id=m.chat.id,
+                    user_id=m.from_user.id if m.from_user else None,
+                    text=m.text or m.caption or "",
+                    date=m.date
+                ))
+                db.session.commit()
+        except Exception as e:
+            logger.error(f"Error logging message: {e}")
+        # Invalidate TTL caches so new messages appear immediately
+        try:
+            chat_id = m.chat.id if m.chat else None
+            if chat_id:
+                _api_cache.delete_prefix(f"dialogs:{session_key}")
+                _api_cache.delete(f"msgs:{session_key}:{chat_id}")
+                _api_cache.delete(f"acct:{session_key}")
+        except Exception:
+            pass
+        try:
+            await _auto_preserve(c, m, session_key)
+        except Exception as e:
+            logger.error(f"Auto-preserve error: {e}")
+
+    @client.on_message(pyro_filters.outgoing)
+    async def save_outgoing(c, m):
+        """Also preserve YOUR OWN sent media in protected chats."""
+        try:
+            await _auto_preserve(c, m, session_key)
+        except Exception as e:
+            logger.error(f"Auto-preserve outgoing error: {e}")
+
+    @client.on_deleted_messages()
+    async def on_deleted(c, messages):
+        try:
+            msg_ids = [m.id for m in messages]
+            with app.app_context():
+                rows = PreservedMedia.query.filter(
+                    PreservedMedia.session_key == session_key,
+                    PreservedMedia.message_id.in_(msg_ids)
+                ).all()
+                for row in rows:
+                    row.original_deleted = True
+                if rows:
+                    db.session.commit()
+                    logger.info(f"Marked {len(rows)} preserved media as originally deleted")
+        except Exception as e:
+            logger.error(f"on_deleted error: {e}")
+
+    return client
+
+def login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('app_authenticated'):
+            return redirect(url_for('app_login'))
+        return f(*args, **kwargs)
+    return decorated
+
+def api_login_required(f):
+    @wraps(f)
+    def decorated(*args, **kwargs):
+        if not session.get('app_authenticated'):
+            return jsonify({"error": "Unauthorized", "code": "AUTH_REQUIRED"}), 401
+        return f(*args, **kwargs)
+    return decorated
+
+# ── Async runner ──────────────────────────────────────────────────────────────
+
+_loop = asyncio.new_event_loop()
+threading.Thread(target=_loop.run_forever, daemon=True).start()
+
+def run_async(coro):
+    return asyncio.run_coroutine_threadsafe(coro, _loop).result()
+
+# ── Startup: restore download queue from DB (no Telegram reconnect) ────────────
+
+def _startup_restore():
+    """On app start, restore the in-memory download_queue from the DB so
+    previously queued/completed downloads are visible again after a redeploy.
+    Telegram sessions are NOT auto-reconnected — they connect only when the
+    user opens the app and selects a session."""
+    with app.app_context():
+        # DB may still be finishing its own boot/recovery right when this
+        # thread starts; retry a few times instead of silently giving up.
+        rows = None
+        for attempt in range(1, 6):
+            try:
+                rows = ServerDownload.query.all()
+                break
+            except Exception as e:
+                db.session.rollback()
+                if attempt == 5:
+                    logger.warning(f"[startup] Giving up restoring downloads from DB after {attempt} attempts: {e}")
+                    return
+                delay = 1.5 * attempt
+                logger.warning(f"[startup] DB not ready for download restore (attempt {attempt}/5): {e}. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+        for row in rows or []:
+            download_queue[row.download_id] = {
+                "status":    row.status or "done",
+                "chat_id":   str(row.chat_id),
+                "msg_id":    str(row.message_id),
+                "filename":  row.file_name,
+                "safe_name": row.file_name,
+                "path":      None,   # disk path gone after redeploy; DB copy used
+                "error":     row.error,
+                "size":      format_file_size(row.file_size) if row.file_size else None,
+            }
+        logger.info(f"[startup] Restored {len(download_queue)} download record(s) from DB.")
+
+threading.Thread(target=_startup_restore, daemon=True).start()
+
+# ── General-purpose TTL cache (dialogs, messages, account info) ───────────────
+
+class _TTLCache:
+    """Thread-safe in-memory cache with per-entry TTL (seconds)."""
+    def __init__(self):
+        self._data = {}
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            value, expires = entry
+            if datetime.utcnow().timestamp() > expires:
+                del self._data[key]
+                return None
+            return value
+
+    def set(self, key, value, ttl=120):
+        with self._lock:
+            self._data[key] = (value, datetime.utcnow().timestamp() + ttl)
+
+    def delete(self, key):
+        with self._lock:
+            self._data.pop(key, None)
+
+    def delete_prefix(self, prefix):
+        with self._lock:
+            for k in [k for k in self._data if k.startswith(prefix)]:
+                del self._data[k]
+
+_api_cache = _TTLCache()
+
+# ── Thumbnail cache & concurrency guards ──────────────────────────────────────
+
+THUMB_CACHE_MAX = 300
+THUMB_TIMEOUT   = 25   # seconds per thumb download — Telegram's own flood-wait on
+                       # upload.GetFile can force multi-second delays server-side,
+                       # so this must be generous enough to survive that wait
+                       # instead of aborting a request Telegram was about to honor.
+_thumb_cache      = {}
+_thumb_cache_lock = threading.Lock()
+
+def _cache_get(key):
+    with _thumb_cache_lock:
+        return _thumb_cache.get(key)
+
+def _cache_set(key, value):
+    with _thumb_cache_lock:
+        if len(_thumb_cache) >= THUMB_CACHE_MAX:
+            for k in list(_thumb_cache.keys())[:60]:
+                del _thumb_cache[k]
+        _thumb_cache[key] = value
+
+async def _make_semaphore(n):
+    return asyncio.Semaphore(n)
+
+# Kept modest on purpose: Telegram enforces its own per-account flood control on
+# upload.GetFile independent of our concurrency. Firing more requests at once only
+# makes Telegram impose longer waits on *every* request, which is what caused the
+# timeout storm — so a smaller, steadier concurrency actually loads faster overall.
+_thumb_sem  = asyncio.run_coroutine_threadsafe(_make_semaphore(3), _loop).result()
+_stream_sem = asyncio.run_coroutine_threadsafe(_make_semaphore(3), _loop).result()
+
+# In-flight de-duplication: if the same thumbnail is already being fetched from
+# Telegram, concurrent/retried requests await that same result instead of firing
+# another upload.GetFile call and adding to the flood-wait queue.
+_thumb_inflight = {}
+_thumb_inflight_lock = threading.Lock()
+
+# ── Client management ─────────────────────────────────────────────────────────
+
+def _is_broken_pipe(e):
+    return "Broken pipe" in str(e) or "BrokenPipeError" in type(e).__name__
+
+def _is_auth_key_duplicated(e):
+    return "AUTH_KEY_DUPLICATED" in str(e)
+
+async def clear_client(session_string):
+    if session_string in telegram_clients:
+        try:
+            await telegram_clients[session_string].stop()
+        except Exception:
+            pass
+        del telegram_clients[session_string]
+
+async def get_client(session_string, force_reconnect=False):
+    if not session_string:
+        return None
+    if force_reconnect and session_string in telegram_clients:
+        try:
+            await telegram_clients[session_string].stop()
+        except Exception:
+            pass
+        del telegram_clients[session_string]
+    if session_string not in telegram_clients:
+        client = create_telegram_client(session_string)
+        await client.start()
+        telegram_clients[session_string] = client
+    return telegram_clients[session_string]
+
+async def run_with_reconnect(session_string, coro_factory):
+    for attempt in range(2):
+        try:
+            client = await get_client(session_string, force_reconnect=(attempt > 0))
+            return await coro_factory(client)
+        except Exception as e:
+            if _is_broken_pipe(e) and attempt == 0:
+                continue
+            raise
+
+# ── Download (server-side) ────────────────────────────────────────────────────
+
+async def _download_to_server(download_id, session_str, chat_id, msg_id):
+    entry = download_queue[download_id]
+    sk = session_str[:16]
+    try:
+        entry["status"] = "downloading"
+        try:
+            peer_id = int(chat_id)
+        except Exception:
+            peer_id = chat_id
+
+        async def _do(client):
+            msg = await client.get_messages(peer_id, int(msg_id))
+            if not msg or not msg.media:
+                entry["status"] = "failed"
+                entry["error"] = "No downloadable media"
+                return
+            media_obj = getattr(msg, msg.media.value, None)
+            file_name = getattr(media_obj, "file_name", None)
+            if not file_name:
+                ext = ".file"
+                if msg.photo:        ext = ".jpg"
+                elif msg.video:      ext = ".mp4"
+                elif msg.audio:      ext = ".mp3"
+                elif msg.voice:      ext = ".ogg"
+                elif msg.animation:  ext = ".mp4"
+                elif msg.sticker:    ext = ".webp"
+                elif msg.video_note: ext = ".mp4"
+                file_name = f"file_{msg_id}{ext}"
+            safe_name = f"{download_id}_{file_name}"
+            dest = os.path.join(DOWNLOADS_DIR, safe_name)
+            entry["filename"] = file_name
+            entry["safe_name"] = safe_name
+            await client.download_media(msg, file_name=dest)
+            if os.path.exists(dest):
+                file_size = os.path.getsize(dest)
+                entry["size"] = format_file_size(file_size)
+                entry["path"] = dest
+                entry["status"] = "done"
+                # Persist metadata to DB — no file_data blob, disk file is the source of truth
+                try:
+                    with app.app_context():
+                        existing = ServerDownload.query.filter_by(download_id=download_id).first()
+                        if existing:
+                            existing.file_name = file_name
+                            existing.file_size = file_size
+                            existing.file_data = None   # never store blob — disk file is enough
+                            existing.file_path = dest
+                            existing.status    = "done"
+                        else:
+                            db.session.add(ServerDownload(
+                                download_id = download_id,
+                                session_key = sk,
+                                chat_id     = int(chat_id),
+                                message_id  = int(msg_id),
+                                file_name   = file_name,
+                                file_size   = file_size,
+                                file_data   = None,     # never store blob — disk file is enough
+                                file_path   = dest,
+                                status      = "done",
+                            ))
+                        db.session.commit()
+                    logger.info(f"Download {download_id} persisted to DB ({format_file_size(file_size)}): {file_name}")
+                except Exception as db_err:
+                    # Roll back so this session isn't left in a dirty/broken
+                    # state for the next DB operation on this thread — without
+                    # this, one transient failure here could cascade into
+                    # unrelated later queries failing too.
+                    db.session.rollback()
+                    logger.warning(f"Could not persist download {download_id} to DB: {db_err}")
+            else:
+                entry["status"] = "failed"
+                entry["error"] = "File not written"
+
+        await run_with_reconnect(session_str, _do)
+    except Exception as e:
+        logger.error(f"Server download error [{download_id}]: {e}")
+        entry["status"] = "failed"
+        entry["error"] = str(e)
+
+# ── Telegram data helpers ─────────────────────────────────────────────────────
+
+DIALOGS_PAGE_SIZE = 100  # Fetch chats/channels in bigger batches so each scroll
+                          # doesn't burn a separate Telegram API call — 100 per
+                          # request instead of 20 means 5x fewer round trips.
+
+async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_key=None):
+    cache_key = f"dialogs:{session_key}:{offset}:{limit}" if session_key else None
+    if cache_key:
+        cached = _api_cache.get(cache_key)
+        if cached is not None:
+            return cached
+    dialogs = []
+    count = 0
+    async for dialog in client.get_dialogs():
+        if count < offset:
+            count += 1
+            continue
+        dialogs.append({
+            "name": dialog.chat.title or dialog.chat.first_name or "Unknown",
+            "id": dialog.chat.id,
+            "unread_count": dialog.unread_messages_count,
+            "is_channel": dialog.chat.type.value == "channel",
+            "is_group": dialog.chat.type.value in ["group", "supergroup"],
+            "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"]
+        })
+        if len(dialogs) >= limit:
+            break
+    if cache_key:
+        _api_cache.set(cache_key, dialogs, ttl=900)  # 15 min — bigger pages, so
+                                                       # keep them around longer
+                                                       # to avoid re-hitting Telegram
+    return dialogs
+
+async def get_account_info(session_string):
+    sk = session_string[:16]
+    cache_key = f"acct:{sk}"
+    cached = _api_cache.get(cache_key)
+    if cached:
+        return cached
+    try:
+        async def _do(client):
+            me = await client.get_me()
+            profile_photo = None
+            if me.photo:
+                try:
+                    data = await client.download_media(me.photo.big_file_id, in_memory=True)
+                    if data:
+                        profile_photo = base64.b64encode(data.getvalue()).decode('utf-8')
+                except Exception:
+                    pass
+            dialogs = await get_dialogs_list(client, offset=0, session_key=sk)
+            return {
+                "id": me.id,
+                "first_name": me.first_name or "",
+                "last_name": me.last_name or "",
+                "username": me.username or "No username",
+                "phone": me.phone_number or "Hidden",
+                "profile_photo": profile_photo,
+                "dialogs": dialogs,
+                "has_more_dialogs": len(dialogs) == DIALOGS_PAGE_SIZE
+            }
+        result = await run_with_reconnect(session_string, _do)
+        if "error" not in result:
+            _api_cache.set(cache_key, result, ttl=1800)  # 30 min
+        return result
+    except Exception as e:
+        return {"error": str(e)}
+
+DOWNLOADABLE_MEDIA = {"photo", "video", "document", "audio", "voice", "animation", "video_note", "sticker"}
+
+def _extract_forward(msg):
+    if msg.forward_from:
+        name = f"{msg.forward_from.first_name or ''} {msg.forward_from.last_name or ''}".strip()
+        return name or "Unknown"
+    if msg.forward_from_chat:
+        return msg.forward_from_chat.title or msg.forward_from_chat.first_name or "Unknown"
+    if getattr(msg, 'forward_sender_name', None):
+        return msg.forward_sender_name
+    return None
+
+def _extract_sender(msg):
+    u = getattr(msg, 'from_user', None)
+    if u:
+        parts = [p for p in [getattr(u, 'first_name', None), getattr(u, 'last_name', None)] if p]
+        name = " ".join(parts) if parts else (f"@{u.username}" if getattr(u, 'username', None) else f"User {u.id}")
+        return name, str(u.id)
+    sc = getattr(msg, 'sender_chat', None)
+    if sc:
+        name = getattr(sc, 'title', None) or getattr(sc, 'username', None) or f"Chat {sc.id}"
+        return name, str(sc.id)
+    sig = getattr(msg, 'author_signature', None) or getattr(msg, 'post_author', None)
+    if sig:
+        return sig, sig
+    return None, None
+
+PREVIEW_KINDS = {"photo", "video", "audio", "voice", "sticker", "animation", "video_note"}
+
+def _build_msg_dict(msg):
+    media_type = msg.media.value if msg.media else None
+    downloadable = media_type in DOWNLOADABLE_MEDIA if media_type else False
+    sender_name, sender_key = _extract_sender(msg) if not msg.outgoing else (None, None)
+
+    preview_kind = media_type if media_type in PREVIEW_KINDS else None
+    mime_type = None
+
+    m = {
+        "id": msg.id,
+        "date": msg.date.isoformat() if msg.date else None,
+        "text": msg.text or msg.caption or "",
+        "is_outgoing": msg.outgoing,
+        "has_media": downloadable,
+        "media_type": media_type,
+        "preview_kind": preview_kind,
+        "forward_from": _extract_forward(msg),
+        "sender_name": sender_name,
+        "sender_key": sender_key,
+    }
+    if downloadable:
+        try:
+            obj = getattr(msg, media_type)
+            if hasattr(obj, 'file_size') and obj.file_size:
+                m["file_size"] = format_file_size(obj.file_size)
+            if hasattr(obj, 'file_name') and obj.file_name:
+                m["file_name"] = obj.file_name
+            if hasattr(obj, 'duration') and obj.duration:
+                m["duration"] = obj.duration
+            mime_type = getattr(obj, 'mime_type', None)
+        except Exception:
+            pass
+    m["mime_type"] = mime_type
+    return m
+
+async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0, query=None, media_only=False):
+    try:
+        chat_id = int(chat_id)
+    except Exception:
+        pass
+
+    sk = session_string[:16]
+    # Only cache standard (non-search, non-media-only, first page) requests
+    use_cache = (not query and not media_only and offset_id == 0)
+    cache_key = f"msgs:{sk}:{chat_id}" if use_cache else None
+    if cache_key:
+        cached = _api_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+    try:
+        async def _do(client):
+            chat = None
+            try:
+                chat = await client.get_chat(chat_id)
+            except Exception as e:
+                logger.warning(f"get_chat failed for {chat_id}: {e}")
+                # get_chat can fail with PEER_ID_INVALID if the Pyrogram session
+                # hasn't cached the access hash yet — but get_chat_history often
+                # still works. Continue with a fallback name instead of bailing.
+
+            chat_name = (
+                (getattr(chat, "title", None) or getattr(chat, "first_name", None))
+                if chat else None
+            ) or "Chat"
+            messages = []
+            has_more = False
+
+            if query:
+                try:
+                    async for msg in client.search_messages(chat_id, query=query, limit=limit):
+                        if media_only and not msg.media:
+                            continue
+                        messages.append(_build_msg_dict(msg))
+                    messages.sort(key=lambda x: x["id"], reverse=True)
+                except Exception as e:
+                    logger.warning(f"search_messages failed for {chat_id}: {e}")
+                    return {"error": f"Could not search messages: {e}"}
+            elif media_only:
+                count = 0
+                try:
+                    async for msg in client.get_chat_history(chat_id, limit=1500, offset_id=offset_id if offset_id > 0 else 0):
+                        if not msg.media:
+                            continue
+                        if (msg.media.value if msg.media else None) not in DOWNLOADABLE_MEDIA:
+                            continue
+                        messages.append(_build_msg_dict(msg))
+                        count += 1
+                        if count >= limit:
+                            has_more = True
+                            break
+                except Exception as e:
+                    logger.warning(f"get_chat_history (media) failed for {chat_id}: {e}")
+                    if not messages:
+                        return {"error": f"Could not load media: {e}"}
+            else:
+                try:
+                    async for msg in client.get_chat_history(chat_id, limit=limit, offset_id=offset_id if offset_id > 0 else 0):
+                        messages.append(_build_msg_dict(msg))
+                    has_more = len(messages) >= limit
+                except Exception as e:
+                    logger.warning(f"get_chat_history failed for {chat_id}: {e}")
+                    if not messages:
+                        return {"error": f"Could not load messages: {e}"}
+
+            can_manage = False
+            if chat:
+                can_manage = getattr(chat.type, "value", "") in ["channel", "group", "supergroup"]
+            return {
+                "messages": messages,
+                "chat_name": chat_name,
+                "has_more": has_more,
+                "can_manage": can_manage,
+            }
+
+        result = await run_with_reconnect(session_string, _do)
+        if cache_key and "error" not in result:
+            _api_cache.set(cache_key, result, ttl=120)  # 2 min
+        return result
+    except Exception as e:
+        logger.error(f"Error in get_messages_from_chat: {e}", exc_info=True)
+        return {"error": str(e)}
+
+# ── Media helpers ─────────────────────────────────────────────────────────────
+
+def _guess_mime(media_type, mime_from_obj=None):
+    if mime_from_obj:
+        return mime_from_obj
+    return {
+        "photo": "image/jpeg", "sticker": "image/webp",
+        "audio": "audio/mpeg", "voice": "audio/ogg",
+        "video": "video/mp4", "video_note": "video/mp4", "animation": "video/mp4",
+    }.get(media_type, "application/octet-stream")
+
+# ── Routes ────────────────────────────────────────────────────────────────────
+
+@app.route("/api/media-thumb/<chat_id>/<message_id>")
+@api_login_required
+def media_thumb(chat_id, message_id):
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    cache_key = f"{session_str[:16]}:{chat_id}:{message_id}"
+    cached = _cache_get(cache_key)
+    if cached:
+        data, mime = cached
+        return Response(data, mimetype=mime, headers={"Cache-Control": "private, max-age=7200"})
+
+    async def get_thumb():
+        async with _thumb_sem:
+            try:
+                peer_id = int(chat_id)
+            except Exception:
+                peer_id = chat_id
+
+            async def _do(client):
+                msg = await asyncio.wait_for(
+                    client.get_messages(peer_id, int(message_id)), timeout=8
+                )
+                if not msg or not msg.media:
+                    return None, None, "NO_MEDIA"
+                media_type = msg.media.value if msg.media else None
+
+                if media_type == "photo":
+                    obj = msg.photo
+                    thumbs = getattr(obj, "thumbs", None)
+                    if thumbs:
+                        # Pick a small/medium-res thumb instead of the full photo
+                        # to keep previews fast and avoid timeouts on large images.
+                        pick = thumbs[len(thumbs) // 2] if len(thumbs) > 1 else thumbs[0]
+                        try:
+                            t = await asyncio.wait_for(
+                                client.download_media(pick.file_id, in_memory=True), timeout=THUMB_TIMEOUT
+                            )
+                            return t.getvalue(), "image/jpeg", None
+                        except Exception:
+                            pass  # fall through to full-res download below
+                    data = await asyncio.wait_for(
+                        client.download_media(msg, in_memory=True), timeout=THUMB_TIMEOUT
+                    )
+                    return data.getvalue(), "image/jpeg", None
+
+                if media_type == "sticker":
+                    obj = msg.sticker
+                    mime = getattr(obj, "mime_type", "image/webp") or "image/webp"
+                    is_animated = getattr(obj, "is_animated", False)
+                    is_video_sticker = getattr(obj, "is_video", False)
+                    if is_animated or is_video_sticker or "video" in mime or "webm" in mime:
+                        thumbs = getattr(obj, "thumbs", None)
+                        if thumbs:
+                            t = await asyncio.wait_for(
+                                client.download_media(thumbs[-1].file_id, in_memory=True), timeout=THUMB_TIMEOUT
+                            )
+                            return t.getvalue(), "image/jpeg", None
+                        return None, None, "NO_PREVIEW"
+                    data = await asyncio.wait_for(
+                        client.download_media(msg, in_memory=True), timeout=THUMB_TIMEOUT
+                    )
+                    return data.getvalue(), mime, None
+
+                if media_type == "animation":
+                    obj = msg.animation
+                    thumbs = getattr(obj, "thumbs", None)
+                    if thumbs:
+                        t = await asyncio.wait_for(
+                            client.download_media(thumbs[-1].file_id, in_memory=True), timeout=THUMB_TIMEOUT
+                        )
+                        return t.getvalue(), "image/jpeg", None
+                    return None, None, "NO_PREVIEW"
+
+                if media_type in ("video", "video_note"):
+                    obj = getattr(msg, media_type)
+                    thumbs = getattr(obj, "thumbs", None)
+                    if thumbs:
+                        t = await asyncio.wait_for(
+                            client.download_media(thumbs[-1].file_id, in_memory=True), timeout=THUMB_TIMEOUT
+                        )
+                        return t.getvalue(), "image/jpeg", None
+                    return None, None, "NO_PREVIEW"
+
+                return None, None, "NO_PREVIEW"
+
+            return await run_with_reconnect(session_str, _do)
+
+    # De-dupe concurrent/retried requests for the same thumbnail: only one
+    # actually talks to Telegram, everyone else just awaits its result. This
+    # keeps retries (including bulk "load all timed out") from stacking more
+    # upload.GetFile calls onto Telegram's flood-wait queue.
+    with _thumb_inflight_lock:
+        fut = _thumb_inflight.get(cache_key)
+        is_owner = fut is None
+        if is_owner:
+            fut = concurrent.futures.Future()
+            _thumb_inflight[cache_key] = fut
+
+    if not is_owner:
+        try:
+            data, mime, code = fut.result(timeout=THUMB_TIMEOUT + 15)
+        except Exception:
+            return jsonify({"error": "Timeout", "code": "TIMEOUT", "retryable": True}), 504
+        if code:
+            return jsonify({"error": code, "code": code, "retryable": False}), 404
+        return Response(data, mimetype=mime, headers={"Cache-Control": "private, max-age=7200"})
+
+    try:
+        result = run_async(get_thumb())
+        fut.set_result(result)
+        data, mime, code = result
+        if code:
+            return jsonify({"error": code, "code": code, "retryable": False}), 404
+        _cache_set(cache_key, (data, mime))
+        return Response(data, mimetype=mime, headers={"Cache-Control": "private, max-age=7200"})
+    except asyncio.TimeoutError:
+        fut.set_exception(asyncio.TimeoutError())
+        return jsonify({"error": "Timeout", "code": "TIMEOUT", "retryable": True}), 504
+    except Exception as e:
+        fut.set_exception(e)
+        err = str(e)
+        logger.error(f"media-thumb error: {err}")
+        if "FLOOD" in err or "Too Many" in err.lower():
+            return jsonify({"error": "Rate limited", "code": "RATE_LIMITED", "retryable": True}), 429
+        if any(k in err.upper() for k in ("AUTH", "SESSION", "UNAUTHORIZED")):
+            return jsonify({"error": "Session expired", "code": "AUTH_EXPIRED", "retryable": False}), 401
+        return jsonify({"error": "Server error", "code": "INTERNAL", "retryable": True}), 500
+    finally:
+        with _thumb_inflight_lock:
+            if _thumb_inflight.get(cache_key) is fut:
+                del _thumb_inflight[cache_key]
+
+
+@app.route("/api/media-stream/<chat_id>/<message_id>")
+@api_login_required
+def media_stream(chat_id, message_id):
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    async def get_info():
+        async with _stream_sem:
+            try:
+                peer_id = int(chat_id)
+            except Exception:
+                peer_id = chat_id
+
+            async def _do(client):
+                msg = await asyncio.wait_for(
+                    client.get_messages(peer_id, int(message_id)), timeout=8
+                )
+                if not msg or not msg.media:
+                    return None, None, None
+                media_type = msg.media.value if msg.media else None
+                try:
+                    obj = getattr(msg, media_type)
+                    mime = getattr(obj, "mime_type", None)
+                    size = getattr(obj, "file_size", None)
+                except Exception:
+                    mime, size = None, None
+                mime = _guess_mime(media_type, mime)
+                return msg, mime, size
+
+            return await run_with_reconnect(session_str, _do)
+
+    try:
+        msg, mime, file_size = run_async(get_info())
+        if not msg:
+            return jsonify({"error": "Not found", "code": "NOT_FOUND"}), 404
+
+        def stream_wrapper():
+            import queue as _q
+            q = _q.Queue(maxsize=20)
+
+            async def producer():
+                async with _stream_sem:
+                    try:
+                        peer_id = int(chat_id)
+                    except Exception:
+                        peer_id = chat_id
+
+                    async def _do(client):
+                        m = await asyncio.wait_for(
+                            client.get_messages(peer_id, int(message_id)), timeout=8
+                        )
+                        if not m or not m.media:
+                            return
+                        async for chunk in client.stream_media(m):
+                            while True:
+                                try:
+                                    q.put(chunk, block=True, timeout=2.0)
+                                    break
+                                except _q.Full:
+                                    continue
+
+                    try:
+                        await run_with_reconnect(session_str, _do)
+                    except Exception as e:
+                        logger.error(f"stream producer error: {e}")
+                    finally:
+                        q.put(None)
+
+            asyncio.run_coroutine_threadsafe(producer(), _loop)
+            while True:
+                try:
+                    chunk = q.get(timeout=60)
+                    if chunk is None:
+                        break
+                    yield chunk
+                except _q.Empty:
+                    break
+                except Exception:
+                    break
+
+        headers = {
+            "Content-Disposition": "inline",
+            "Accept-Ranges": "none",
+            "Cache-Control": "no-store",
+            "X-Content-Type-Options": "nosniff",
+        }
+        if file_size:
+            headers["Content-Length"] = str(file_size)
+        return Response(stream_wrapper(), mimetype=mime, headers=headers)
+    except asyncio.TimeoutError:
+        return jsonify({"error": "Timeout", "code": "TIMEOUT"}), 504
+    except Exception as e:
+        logger.error(f"media-stream error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+
+@app.route("/api/messages/<chat_id>")
+@api_login_required
+def get_messages_route(chat_id):
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+    try:
+        result = run_async(get_messages_from_chat(
+            session_str, chat_id,
+            limit=int(request.args.get("limit", 50)),
+            offset_id=int(request.args.get("offset_id", 0)),
+            query=request.args.get("query"),
+            media_only=request.args.get("media_only") == "true"
+        ))
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"get_messages_route error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+@app.route("/api/dialogs")
+@api_login_required
+def get_dialogs_route():
+    offset = int(request.args.get("offset", 0))
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    async def task():
+        sk = session_str[:16]
+        async def _do(client):
+            dialogs = await get_dialogs_list(client, offset=offset, session_key=sk)
+            return {"dialogs": dialogs, "has_more_dialogs": len(dialogs) == DIALOGS_PAGE_SIZE}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"get_dialogs_route error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+@app.route("/api/sessions")
+@api_login_required
+def get_sessions():
+    from datetime import datetime as _dt
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    async def task():
+        from pyrogram import raw
+        async def _do(client):
+            result = await client.invoke(raw.functions.account.GetAuthorizations())
+            sessions = []
+            for auth in result.authorizations:
+                def _ts(v):
+                    try:
+                        if isinstance(v, int):
+                            return _dt.utcfromtimestamp(v).isoformat()
+                        return v.isoformat() if hasattr(v, 'isoformat') else str(v)
+                    except Exception:
+                        return None
+                sessions.append({
+                    "hash": auth.hash,
+                    "current": auth.hash == 0,
+                    "device": auth.device_model,
+                    "platform": auth.platform,
+                    "system": auth.system_version,
+                    "app_name": auth.app_name,
+                    "app_version": auth.app_version,
+                    "ip": auth.ip,
+                    "country": auth.country,
+                    "region": auth.region,
+                    "date_created": _ts(auth.date_created),
+                    "date_active": _ts(auth.date_active),
+                })
+            sessions.sort(key=lambda s: (not s["current"], s["date_active"] or ""))
+            return {"sessions": sessions}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"get_sessions error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+@app.route("/api/sessions/terminate", methods=["POST"])
+@api_login_required
+def terminate_session():
+    session_str = session.get("session_string")
+    data = request.json or {}
+    hash_val = data.get("hash")
+    if not session_str or hash_val is None:
+        return jsonify({"error": "Missing params", "code": "BAD_REQUEST"}), 400
+    if hash_val == 0:
+        return jsonify({"error": "Cannot terminate current session", "code": "FORBIDDEN"}), 403
+
+    async def task():
+        from pyrogram import raw
+        async def _do(client):
+            await client.invoke(raw.functions.account.ResetAuthorization(hash=hash_val))
+            return {"success": True}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"terminate_session error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+@app.route("/api/queue-download/<chat_id>/<message_id>")
+@api_login_required
+def queue_download(chat_id, message_id):
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session"}), 400
+    download_id = str(uuid.uuid4())[:8]
+    download_queue[download_id] = {
+        "status": "queued", "chat_id": chat_id, "msg_id": message_id,
+        "filename": None, "safe_name": None, "path": None, "error": None, "size": None
+    }
+    asyncio.run_coroutine_threadsafe(
+        _download_to_server(download_id, session_str, chat_id, message_id), _loop
+    )
+    return jsonify({"download_id": download_id})
+
+@app.route("/api/downloads")
+@api_login_required
+def list_downloads():
+    # Start with in-memory queue
+    items_map = {
+        k: {"id": k, "status": v["status"], "filename": v["filename"],
+            "safe_name": v["safe_name"], "error": v["error"], "size": v["size"],
+            "from_db": False}
+        for k, v in list(download_queue.items())
+    }
+    # Merge in DB records (survive redeploys). If the DB is transiently
+    # unavailable (e.g. still recovering after a restart), degrade gracefully
+    # and still return the in-memory queue instead of a raw 500 — the frontend
+    # polls this endpoint every 2.5s, so a hard failure here becomes a burst
+    # of errors instead of a single quiet retry.
+    sk = session.get("session_string", "")[:16]
+    degraded = False
+    try:
+        for row in ServerDownload.query.filter_by(session_key=sk).order_by(ServerDownload.created_at.desc()).limit(200).all():
+            if row.download_id not in items_map:
+                items_map[row.download_id] = {
+                    "id":        row.download_id,
+                    "status":    row.status or "done",
+                    "filename":  row.file_name,
+                    "safe_name": row.file_name,
+                    "error":     row.error,
+                    "size":      format_file_size(row.file_size) if row.file_size else None,
+                    "from_db":   True,
+                }
+    except Exception as e:
+        db.session.rollback()
+        if not _db_is_transient_error(e):
+            raise
+        logger.warning(f"list_downloads: DB temporarily unavailable, serving in-memory queue only: {e}")
+        degraded = True
+    resp = {"downloads": list(items_map.values())}
+    if degraded:
+        resp["degraded"] = True
+    return jsonify(resp)
+
+@app.route("/serve-download/<download_id>")
+@login_required
+def serve_download(download_id):
+    # Check in-memory queue first
+    entry = download_queue.get(download_id)
+    if entry and entry["status"] == "done" and entry.get("path"):
+        path = entry["path"]
+        if os.path.exists(path):
+            return send_file(path, as_attachment=True, download_name=entry["filename"])
+    # Fall back to DB copy (survives redeploys)
+    sk = session.get("session_string", "")[:16]
+    try:
+        row = ServerDownload.query.filter_by(download_id=download_id, session_key=sk).first()
+    except Exception as e:
+        db.session.rollback()
+        if not _db_is_transient_error(e):
+            raise
+        logger.warning(f"serve_download: DB temporarily unavailable: {e}")
+        return "Downloads database temporarily unavailable, please retry shortly", 503
+    if row:
+        if row.file_path and os.path.exists(row.file_path):
+            return send_file(row.file_path, as_attachment=True, download_name=row.file_name or "file")
+        # Disk file missing — check by prefix scan (covers path=NULL edge case)
+        for fname in os.listdir(DOWNLOADS_DIR):
+            if fname.startswith(f"{download_id}_"):
+                fpath = os.path.join(DOWNLOADS_DIR, fname)
+                return send_file(fpath, as_attachment=True, download_name=row.file_name or fname)
+    return "File not found — it may have been cleared or the server was restarted", 404
+
+@app.route("/api/downloads/zip")
+@login_required
+def download_all_zip():
+    """Build a ZIP of all completed downloads and serve it.
+
+    Key constraints:
+    - NEVER load file_data blobs from DB into RAM — files can be hundreds of MB each.
+    - Write the ZIP to a temp file on disk (not BytesIO) so we don't exhaust RAM.
+    - Query only the metadata columns we need (download_id, file_name, file_path, status).
+    """
+    import zipfile, tempfile, datetime
+    sk = session.get("session_string", "")[:16]
+    added = 0
+    seen_names = {}
+
+    # Write to a temp file so we never hold the full ZIP in RAM.
+    tmp = tempfile.NamedTemporaryFile(suffix=".zip", delete=False,
+                                      dir=DOWNLOADS_DIR, prefix="zip_tmp_")
+    tmp_path = tmp.name
+    try:
+        with zipfile.ZipFile(tmp, "w", zipfile.ZIP_STORED) as zf:
+            # 1. In-memory queue — these always have a disk path when status=done
+            seen_ids = set()
+            for did, entry in list(download_queue.items()):
+                if entry.get("status") != "done":
+                    continue
+                path = entry.get("path")
+                name = entry.get("filename") or "file"
+                if path and os.path.exists(path):
+                    zf.write(path, _zip_unique_name(seen_names, name))
+                    added += 1
+                    seen_ids.add(did)
+
+            # 2. DB records — select ONLY metadata columns, never touch file_data blob.
+            try:
+                db_rows = db.session.query(
+                    ServerDownload.download_id,
+                    ServerDownload.file_name,
+                    ServerDownload.file_path,
+                    ServerDownload.status,
+                ).filter_by(session_key=sk).all()
+            except Exception as e:
+                db.session.rollback()
+                if not _db_is_transient_error(e):
+                    raise
+                logger.warning(f"download_all_zip: DB temporarily unavailable, zipping in-memory items only: {e}")
+                db_rows = []
+
+            for row in db_rows:
+                if row.download_id in seen_ids:
+                    continue  # already added from in-memory queue
+                if row.status and row.status != "done":
+                    continue
+                name = row.file_name or "file"
+                if row.file_path and os.path.exists(row.file_path):
+                    zf.write(row.file_path, _zip_unique_name(seen_names, name))
+                    added += 1
+                else:
+                    # file_path missing or gone — scan by prefix as last resort
+                    for fname in os.listdir(DOWNLOADS_DIR):
+                        if fname.startswith(f"{row.download_id}_") and not fname.startswith("zip_tmp_"):
+                            zf.write(os.path.join(DOWNLOADS_DIR, fname),
+                                     _zip_unique_name(seen_names, name))
+                            added += 1
+                            break
+                    else:
+                        logger.warning(f"download_all_zip: disk file missing for {row.download_id} ({name}), skipping")
+
+        tmp.close()
+        if added == 0:
+            os.unlink(tmp_path)
+            return "No completed downloads to zip", 404
+
+        ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+        logger.info(f"download_all_zip: zipped {added} file(s) → {tmp_path}")
+        return send_file(tmp_path, as_attachment=True,
+                         download_name=f"downloads_{ts}.zip",
+                         mimetype="application/zip")
+    except Exception:
+        tmp.close()
+        try: os.unlink(tmp_path)
+        except OSError: pass
+        raise
+
+def _zip_unique_name(seen, name):
+    if name not in seen:
+        seen[name] = 0
+        return name
+    seen[name] += 1
+    base, _, ext = name.rpartition(".")
+    return f"{base}_{seen[name]}.{ext}" if base else f"{name}_{seen[name]}"
+
+def _delete_disk_files_for(download_id):
+    """Delete any disk file(s) in DOWNLOADS_DIR whose name starts with '{download_id}_'.
+    The original code never saved file_path to DB, so existing rows have it as NULL.
+    Scanning by prefix is the only reliable way to find and clean up those files."""
+    deleted = []
+    try:
+        for fname in os.listdir(DOWNLOADS_DIR):
+            if fname.startswith(f"{download_id}_"):
+                fpath = os.path.join(DOWNLOADS_DIR, fname)
+                try:
+                    os.remove(fpath)
+                    deleted.append(fname)
+                    logger.info(f"Deleted disk file: {fname}")
+                except Exception as e:
+                    logger.warning(f"Could not delete disk file {fname}: {e}")
+    except Exception as e:
+        logger.warning(f"Error scanning {DOWNLOADS_DIR} for {download_id}: {e}")
+    return deleted
+
+@app.route("/api/downloads/clear-all", methods=["DELETE"])
+@api_login_required
+def clear_all_downloads():
+    """Delete every server download for this session — in-memory queue + DB rows + disk files.
+
+    Key constraints:
+    - NEVER load file_data blobs — query only download_id + file_path metadata.
+    - Use a single bulk DELETE SQL statement instead of row-by-row iteration.
+    - Wipe all files in DOWNLOADS_DIR that match known download_ids (fast, no RAM cost).
+    """
+    sk = session.get("session_string", "")[:16]
+    disk_deleted = 0
+
+    # 1. Collect all known download_ids from in-memory queue and remove entries
+    to_remove = list(download_queue.keys())
+    all_ids = set(to_remove)
+    for did in to_remove:
+        entry = download_queue.pop(did, None)
+        if entry and entry.get("path") and os.path.exists(entry["path"]):
+            try:
+                os.remove(entry["path"])
+                disk_deleted += 1
+            except Exception as e:
+                logger.warning(f"Could not delete queued file {entry['path']}: {e}")
+
+    # 2. Query ONLY metadata (no file_data blob) from DB to get disk paths
+    try:
+        db_rows = db.session.query(
+            ServerDownload.download_id,
+            ServerDownload.file_path,
+        ).filter_by(session_key=sk).all()
+
+        # Delete disk files using stored path
+        for row in db_rows:
+            all_ids.add(row.download_id)
+            if row.file_path and os.path.exists(row.file_path):
+                try:
+                    os.remove(row.file_path)
+                    disk_deleted += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete {row.file_path}: {e}")
+
+        # Bulk-delete all DB rows in one SQL statement — no blob loading, no iteration
+        deleted_db = ServerDownload.query.filter_by(session_key=sk).delete(synchronize_session=False)
+        db.session.commit()
+        logger.info(f"clear_all_downloads: removed {deleted_db} DB rows")
+    except Exception as e:
+        db.session.rollback()
+        if not _db_is_transient_error(e):
+            raise
+        logger.warning(f"clear_all_downloads: DB temporarily unavailable: {e}")
+        return jsonify({"error": "Downloads database temporarily unavailable, please retry shortly"}), 503
+
+    # 3. Scan DOWNLOADS_DIR and delete any remaining files for these ids
+    #    (catches files where file_path was NULL / stale)
+    try:
+        for fname in os.listdir(DOWNLOADS_DIR):
+            if fname.startswith("zip_tmp_"):
+                continue  # skip temp zips
+            prefix = fname.split("_")[0]
+            if prefix in all_ids:
+                try:
+                    os.remove(os.path.join(DOWNLOADS_DIR, fname))
+                    disk_deleted += 1
+                except Exception as e:
+                    logger.warning(f"Could not delete disk file {fname}: {e}")
+    except Exception as e:
+        logger.warning(f"clear_all_downloads: error scanning disk: {e}")
+
+    logger.info(f"clear_all_downloads: {disk_deleted} disk file(s) deleted")
+    return jsonify({"success": True, "deleted_db": deleted_db, "deleted_disk": disk_deleted})
+
+@app.route("/api/downloads/delete/<download_id>", methods=["DELETE"])
+@api_login_required
+def delete_server_download(download_id):
+    disk_deleted = 0
+    # 1. Remove from in-memory queue
+    entry = download_queue.pop(download_id, None)
+    if entry and entry.get("path") and os.path.exists(entry["path"]):
+        try:
+            os.remove(entry["path"])
+            disk_deleted += 1
+            logger.info(f"Deleted queued file: {entry['path']}")
+        except Exception as e:
+            logger.warning(f"Could not delete queued file {entry['path']}: {e}")
+    # Scan by prefix regardless — catches files where path was None after restart
+    disk_deleted += len(_delete_disk_files_for(download_id))
+
+    # 2. Remove from DB — query only metadata (no file_data blob)
+    sk = session.get("session_string", "")[:16]
+    deleted_db = 0
+    try:
+        meta = db.session.query(
+            ServerDownload.id,
+            ServerDownload.file_path,
+        ).filter_by(download_id=download_id, session_key=sk).first()
+        if meta:
+            if meta.file_path and os.path.exists(meta.file_path):
+                try:
+                    os.remove(meta.file_path)
+                    disk_deleted += 1
+                    logger.info(f"Deleted DB file: {meta.file_path}")
+                except Exception as e:
+                    logger.warning(f"Could not delete {meta.file_path}: {e}")
+            deleted_db = ServerDownload.query.filter_by(
+                download_id=download_id, session_key=sk
+            ).delete(synchronize_session=False)
+            db.session.commit()
+            logger.info(f"Deleted download {download_id} from DB ({disk_deleted} disk file(s) removed)")
+    except Exception as e:
+        db.session.rollback()
+        if not _db_is_transient_error(e):
+            raise
+        logger.warning(f"delete_server_download: DB temporarily unavailable: {e}")
+        if not entry:
+            return jsonify({"error": "Downloads database temporarily unavailable, please retry shortly"}), 503
+    if not entry and not deleted_db:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({"success": True, "deleted_disk": disk_deleted})
+
+LANG_NAMES = {
+    "en": "English", "hi": "Hindi", "id": "Indonesian",
+    "ar": "Arabic", "zh-CN": "Chinese (Simplified)", "es": "Spanish",
+    "fr": "French", "de": "German", "ja": "Japanese",
+    "ko": "Korean", "ru": "Russian", "pt": "Portuguese", "tr": "Turkish"
+}
+
+@app.route("/translate", methods=["POST"])
+@api_login_required
+def translate_route():
+    data = request.json
+    text = data.get("text", "").strip()
+    target_lang = data.get("target", data.get("lang", "en"))
+    if not text:
+        return jsonify({"error": "No text"}), 400
+    target_name = LANG_NAMES.get(target_lang, target_lang)
+    try:
+        translated, engine = translate_with_fallback(text, target_lang, target_name)
+        return jsonify({"translated": translated, "engine": engine})
+    except ValueError as e:
+        logger.error(f"Translation failed: {e}")
+        return jsonify({"error": str(e)}), 503
+
+@app.route("/delete-messages", methods=["POST"])
+@api_login_required
+def delete_messages():
+    data = request.json or {}
+    chat_id = data.get("chat_id")
+    message_ids = data.get("message_ids")
+    session_str = session.get("session_string")
+    if not chat_id or not message_ids or not session_str:
+        return jsonify({"error": "Missing params", "code": "BAD_REQUEST"}), 400
+
+    async def task():
+        async def _do(client):
+            await client.delete_messages(chat_id, message_ids)
+            return {"success": True}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"delete_messages error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+@app.route("/download/<chat_id>/<message_id>")
+@login_required
+def download_media_route(chat_id, message_id):
+    session_str = session.get("session_string")
+    if not session_str:
+        return "No session", 400
+
+    async def generate_download():
+        client = await get_client(session_str)
+        try:
+            peer_id = int(chat_id)
+        except Exception:
+            peer_id = chat_id
+        try:
+            msg = await client.get_messages(peer_id, int(message_id))
+            if not msg or not msg.media:
+                return
+            async for chunk in client.stream_media(msg):
+                yield chunk
+        except Exception as e:
+            logger.error(f"Stream error: {e}")
+            if "Broken pipe" in str(e) or "Session" in str(e):
+                if session_str in telegram_clients:
+                    try:
+                        await telegram_clients[session_str].stop()
+                    except Exception:
+                        pass
+                    del telegram_clients[session_str]
+
+    async def get_file_info():
+        try:
+            client = await get_client(session_str)
+            try:
+                peer_id = int(chat_id)
+            except Exception:
+                peer_id = chat_id
+            msg = await client.get_messages(peer_id, int(message_id))
+            if not msg or not msg.media:
+                return None, None
+            media = getattr(msg, msg.media.value)
+            file_name = getattr(media, "file_name", None)
+            if not file_name:
+                ext = ".file"
+                if msg.photo:      ext = ".jpg"
+                elif msg.video:    ext = ".mp4"
+                elif msg.audio:    ext = ".mp3"
+                elif msg.voice:    ext = ".ogg"
+                elif msg.document:
+                    mime = getattr(media, "mime_type", "")
+                    if "video" in mime:   ext = ".mp4"
+                    elif "image" in mime: ext = ".jpg"
+                    elif "audio" in mime: ext = ".mp3"
+                file_name = f"download_{message_id}{ext}"
+            return file_name, getattr(media, "file_size", None)
+        except Exception as e:
+            logger.error(f"File info error: {e}")
+            raise
+
+    try:
+        file_name, file_size = run_async(get_file_info())
+        if not file_name:
+            return "File not found", 404
+
+        def stream_wrapper():
+            import queue
+            q = queue.Queue(maxsize=20)
+
+            async def producer():
+                try:
+                    async for chunk in generate_download():
+                        while True:
+                            try:
+                                q.put(chunk, block=True, timeout=2.0)
+                                break
+                            except queue.Full:
+                                continue
+                except Exception as e:
+                    logger.error(f"Producer error: {e}")
+                finally:
+                    q.put(None)
+
+            asyncio.run_coroutine_threadsafe(producer(), _loop)
+            while True:
+                try:
+                    chunk = q.get(timeout=30)
+                    if chunk is None:
+                        break
+                    yield chunk
+                except queue.Empty:
+                    break
+                except Exception as e:
+                    logger.error(f"Stream yield error: {e}")
+                    break
+
+        headers = {
+            'Content-Disposition': f'attachment; filename="{file_name}"',
+            'Cache-Control': 'no-cache',
+            'X-Content-Type-Options': 'nosniff',
+        }
+        if file_size:
+            headers['Content-Length'] = str(file_size)
+        return Response(stream_wrapper(), headers=headers, mimetype='application/octet-stream')
+    except Exception as e:
+        logger.error(f"Download error: {e}")
+        return str(e), 500
+
+@app.route("/api/deleted-messages/<chat_id>")
+@api_login_required
+def get_deleted_messages(chat_id):
+    try:
+        chat_id = int(chat_id)
+    except Exception:
+        pass
+    msgs = MessageStore.query.filter_by(chat_id=chat_id).order_by(MessageStore.date.desc()).all()
+    return jsonify({"messages": [
+        {"text": m.text, "date": m.date.isoformat() if m.date else None}
+        for m in msgs
+    ]})
+
+@app.route("/api/protected-chats", methods=["GET"])
+@api_login_required
+def list_protected_chats():
+    s = session.get("session_string", "")
+    sk = s[:16]
+    rows = ProtectedChat.query.filter_by(session_key=sk).all()
+    return jsonify({"protected_chats": [r.chat_id for r in rows]})
+
+@app.route("/api/protected-chats/<chat_id>", methods=["POST"])
+@api_login_required
+def protect_chat(chat_id):
+    s = session.get("session_string", "")
+    sk = s[:16]
+    try:
+        cid = int(chat_id)
+    except ValueError:
+        return jsonify({"error": "Invalid chat_id"}), 400
+    if not ProtectedChat.query.filter_by(session_key=sk, chat_id=cid).first():
+        db.session.add(ProtectedChat(session_key=sk, chat_id=cid))
+        db.session.commit()
+    return jsonify({"success": True, "protected": True})
+
+@app.route("/api/protected-chats/<chat_id>", methods=["DELETE"])
+@api_login_required
+def unprotect_chat(chat_id):
+    s = session.get("session_string", "")
+    sk = s[:16]
+    try:
+        cid = int(chat_id)
+    except ValueError:
+        return jsonify({"error": "Invalid chat_id"}), 400
+    ProtectedChat.query.filter_by(session_key=sk, chat_id=cid).delete()
+    db.session.commit()
+    return jsonify({"success": True, "protected": False})
+
+@app.route("/api/preserved", methods=["GET"])
+@api_login_required
+def list_preserved():
+    s = session.get("session_string", "")
+    sk = s[:16]
+    chat_filter = request.args.get("chat_id")
+    q = PreservedMedia.query.filter_by(session_key=sk)
+    if chat_filter:
+        try:
+            q = q.filter_by(chat_id=int(chat_filter))
+        except ValueError:
+            pass
+    items = q.order_by(PreservedMedia.saved_at.desc()).limit(500).all()
+    return jsonify({"preserved": [
+        {
+            "id":               pm.id,
+            "chat_id":          pm.chat_id,
+            "message_id":       pm.message_id,
+            "file_name":        pm.file_name,
+            "file_size":        format_file_size(pm.file_size) if pm.file_size else "—",
+            "media_type":       pm.media_type,
+            "reason":           pm.reason,
+            "saved_at":         pm.saved_at.isoformat() if pm.saved_at else None,
+            "original_deleted": pm.original_deleted,
+            "available":        bool(pm.file_data or (pm.file_path and os.path.exists(pm.file_path))),
+        }
+        for pm in items
+    ]})
+
+@app.route("/api/preserved/<int:item_id>/download")
+@login_required
+def download_preserved(item_id):
+    s = session.get("session_string", "")
+    sk = s[:16]
+    pm = PreservedMedia.query.filter_by(id=item_id, session_key=sk).first()
+    if not pm:
+        return "Not found", 404
+    # Serve from local disk if available, fall back to DB copy
+    if pm.file_path and os.path.exists(pm.file_path):
+        return send_file(pm.file_path, as_attachment=True, download_name=pm.file_name or "file")
+    if pm.file_data:
+        import io
+        return send_file(
+            io.BytesIO(pm.file_data),
+            as_attachment=True,
+            download_name=pm.file_name or "file"
+        )
+    return "File no longer available", 404
+
+@app.route("/api/preserved/<int:item_id>", methods=["DELETE"])
+@api_login_required
+def delete_preserved(item_id):
+    s = session.get("session_string", "")
+    sk = s[:16]
+    pm = PreservedMedia.query.filter_by(id=item_id, session_key=sk).first()
+    if not pm:
+        return jsonify({"error": "Not found"}), 404
+    if pm.file_path and os.path.exists(pm.file_path):
+        try:
+            os.remove(pm.file_path)
+        except Exception:
+            pass
+    pm.file_data = None  # free DB space before delete
+    db.session.delete(pm)
+    db.session.commit()
+    return jsonify({"success": True})
+
+@app.route("/")
+def index():
+    if not session.get('app_authenticated'):
+        return redirect(url_for('app_login'))
+    if session.get("session_string"):
+        return redirect(url_for("view_account"))
+    return render_template("index.html")
+
+@app.route("/login", methods=["GET", "POST"])
+def app_login():
+    if request.method == "POST":
+        if request.form.get("password") == APP_PASSWORD:
+            session['app_authenticated'] = True
+            return redirect(url_for('index'))
+        return render_template("login.html", error="Invalid password")
+    return render_template("login.html")
+
+@app.route("/view", methods=["GET", "POST"])
+@login_required
+def view_account():
+    session_string = request.form.get("session_string") or session.get("session_string")
+    if not session_string:
+        return redirect(url_for("index"))
+    session["session_string"] = session_string
+    result = run_async(get_account_info(session_string))
+    if "error" in result:
+        logger.error(f"Error getting account info: {result['error']}")
+        if _is_auth_key_duplicated(Exception(result["error"])):
+            run_async(clear_client(session_string))
+            session.pop("session_string", None)
+            return render_template("index.html", error=(
+                "This session is already active somewhere else. "
+                "Stop the other instance first, then enter your session string again."
+            ))
+        return render_template("index.html", error=result["error"])
+
+    # ── Persist session so it survives browser close & server restart ──────────
+    try:
+        sk = session_string[:16]
+        label = f"{result.get('first_name', '')} {result.get('last_name', '')}".strip() or result.get('username') or sk
+        existing = StoredSession.query.filter_by(session_key=sk).first()
+        if existing:
+            existing.session_string = session_string
+            existing.label = label
+            existing.last_seen = datetime.utcnow()
+        else:
+            db.session.add(StoredSession(
+                session_key=sk,
+                session_string=session_string,
+                label=label,
+            ))
+        db.session.commit()
+    except Exception as e:
+        logger.error(f"Failed to persist session: {e}")
+
+    return render_template("account.html", account=result)
+
+@app.route("/api/stored-sessions", methods=["GET"])
+@api_login_required
+def list_stored_sessions():
+    rows = StoredSession.query.order_by(StoredSession.last_seen.desc()).all()
+    return jsonify({"sessions": [
+        {
+            "session_key":      r.session_key,
+            "label":            r.label,
+            "created_at":       r.created_at.isoformat() if r.created_at else None,
+            "last_seen":        r.last_seen.isoformat() if r.last_seen else None,
+            "connected":        r.session_string in telegram_clients,
+            "reconnect_failed": bool(r.reconnect_failed),
+        }
+        for r in rows
+    ]})
+
+@app.route("/api/stored-sessions/<session_key>", methods=["DELETE"])
+@api_login_required
+def delete_stored_session(session_key):
+    row = StoredSession.query.filter_by(session_key=session_key).first()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    full_key = row.session_string
+    db.session.delete(row)
+    db.session.commit()
+    run_async(clear_client(full_key))
+    return jsonify({"success": True})
+
+@app.route("/api/stored-sessions/<session_key>/reconnect", methods=["POST"])
+@api_login_required
+def reconnect_stored_session(session_key):
+    row = StoredSession.query.filter_by(session_key=session_key).first()
+    if not row:
+        return jsonify({"error": "Not found"}), 404
+    try:
+        run_async(get_client(row.session_string, force_reconnect=True))
+        row.last_seen = datetime.utcnow()
+        row.reconnect_failed = False
+        db.session.commit()
+        return jsonify({"success": True, "connected": True})
+    except Exception as e:
+        err = str(e)
+        if any(k in err.upper() for k in (
+            "AUTH_KEY_DUPLICATED", "SESSION_REVOKED", "SESSION_EXPIRED",
+            "AUTH_KEY_INVALID", "USER_DEACTIVATED"
+        )):
+            row.reconnect_failed = True
+            db.session.commit()
+            return jsonify({
+                "error": "Session is no longer valid. The session may have been taken over by another login. Please provide a new session string.",
+                "code": "SESSION_INVALID"
+            }), 401
+        return jsonify({"error": err}), 500
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for('app_login'))
+
+@app.route("/_health")
+def health_check():
+    """Deployment readiness probe — always returns 200 so the VM starts up correctly."""
+    return "ok", 200
+
+@app.route("/api/logs")
+@login_required
+def get_logs():
+    """Return recent in-memory log entries for in-app diagnostics.
+    Only available to authenticated users — not publicly exposed."""
+    level   = request.args.get("level", "").upper()   # INFO / WARNING / ERROR
+    limit   = min(int(request.args.get("limit", 200)), 500)
+    entries = list(_log_buffer)                        # oldest→newest
+    if level:
+        entries = [e for e in entries if e["level"] == level]
+    return jsonify({"logs": entries[-limit:]})
+
+@app.route("/api/logs/download")
+@login_required
+def download_log_file():
+    """Download the current app.log file for offline analysis."""
+    log_path = os.path.join(_LOGS_DIR, "app.log")
+    if not os.path.exists(log_path):
+        return jsonify({"error": "Log file not found"}), 404
+    from flask import send_file
+    return send_file(log_path, as_attachment=True, download_name="app.log", mimetype="text/plain")
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
