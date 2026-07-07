@@ -189,7 +189,9 @@ except RuntimeError:
 from pyrogram import Client, filters as pyro_filters
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
-app.secret_key = os.environ.get("SECRET_KEY", "change-me-in-secrets")
+app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("SECRET_KEY")
+if not app.secret_key:
+    raise RuntimeError("SESSION_SECRET environment variable is not set. Set it in Replit Secrets before starting the app.")
 app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
 
 telegram_clients = {}
