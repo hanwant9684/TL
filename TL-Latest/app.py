@@ -2549,14 +2549,14 @@ def _build_export_html(messages, chat_name, media_map, generated_at):
             if msg_id in media_map:
                 mpath = media_map[msg_id]
                 if mtype == "photo":
-                    lines.append(f'<img src="{_html_escape(mpath)}" alt="photo" loading="lazy">')
+                    lines.append(f'<a href="{_html_escape(mpath)}" target="_blank"><img src="{_html_escape(mpath)}" alt="photo" loading="lazy"></a>')
                 elif mtype in ("video", "animation", "video_note"):
                     lines.append(f'<video src="{_html_escape(mpath)}" controls preload="none"></video>')
                 elif mtype in ("audio", "voice"):
                     lines.append(f'<audio src="{_html_escape(mpath)}" controls></audio>')
                 else:
                     display_name = fname or mpath.split("/")[-1]
-                    lines.append(f'<div class="media-placeholder"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div></div></div>')
+                    lines.append(f'<a href="{_html_escape(mpath)}" target="_blank" style="text-decoration:none;display:block"><div class="media-placeholder" style="cursor:pointer;transition:background 0.15s" onmouseover="this.style.background=\'rgba(82,136,193,0.15)\'" onmouseout="this.style.background=\'\'"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div><div style="font-size:0.65rem;color:#5288c1;margin-top:2px">click to open ↗</div></div></div></a>')
             else:
                 display_name = fname or mtype.upper()
                 size_part = f'<div class="media-size">{_html_escape(fsize)}</div>' if fsize else ''
@@ -2796,15 +2796,31 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                 for i, rm in enumerate(media_msgs):
                     mtype = rm.media.value
                     mo = getattr(rm, mtype, None)
-                    fname = getattr(mo, 'file_name', None) or f"file_{rm.id}{_MEDIA_EXT_MAP.get(mtype, '.bin')}"
-                    zip_member = f"media/msg_{rm.id}_{fname}"
-                    tmp_path = os.path.join(tmp_dir, f"msg_{rm.id}_{fname}")
+                    orig_fname = getattr(mo, 'file_name', None) or f"file_{rm.id}{_MEDIA_EXT_MAP.get(mtype, '.bin')}"
+                    # Ask Pyrogram to save to this path; it may append/change extension
+                    tmp_path = os.path.join(tmp_dir, f"msg_{rm.id}_{orig_fname}")
                     try:
                         result = await asyncio.wait_for(
                             client.download_media(rm, file_name=tmp_path), timeout=90
                         )
-                        if result and os.path.exists(tmp_path):
-                            tmp_files[rm.id] = (tmp_path, zip_member)
+                        # result is the ACTUAL path Pyrogram saved to (may differ from tmp_path)
+                        actual_path = str(result) if result else None
+                        if not actual_path or not os.path.exists(actual_path):
+                            # fallback: check tmp_path itself
+                            actual_path = tmp_path if os.path.exists(tmp_path) else None
+                        if actual_path:
+                            # Build zip member name from actual filename (keeps correct extension)
+                            actual_fname = os.path.basename(actual_path)
+                            # Ensure it has the msg_id prefix for uniqueness
+                            if not actual_fname.startswith(f"msg_{rm.id}_"):
+                                actual_fname = f"msg_{rm.id}_{actual_fname}"
+                            # Normalise: strip control chars and ZIP path separators
+                            actual_fname = "".join(
+                                c if c.isprintable() and c not in '\\/:\0' else "_"
+                                for c in actual_fname
+                            )
+                            zip_member = f"media/{actual_fname}"
+                            tmp_files[rm.id] = (actual_path, zip_member)
                     except Exception as e:
                         logger.warning(f"Export job {job_id}: skip media {rm.id}: {e}")
                     job['media_done'] = i + 1
@@ -2950,8 +2966,8 @@ def start_export_job(chat_id):
 
     from_date_str = data.get("from_date", "").strip()
     to_date_str   = data.get("to_date",   "").strip()
-    from_date_ts  = _parse_date_ts(from_date_str)
-    to_date_ts    = _parse_date_ts(to_date_str, end_of_day=True)
+    from_date_ts  = _parse_date_ts(from_date_str)          # UTC midnight of that day (lower bound)
+    to_date_ts    = _parse_date_ts(to_date_str)             # UTC midnight of that day; +86400 added in worker → full day included
 
     try:
         chat_id_int = int(chat_id)
