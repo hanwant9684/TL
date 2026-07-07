@@ -2462,11 +2462,40 @@ def _ist_date_key(iso_str):
     except Exception:
         return str(iso_str)[:10]
 
+# ── Media embedding helpers ───────────────────────────────────────────────────
+_DATA_URI_LIMIT = 10 * 1024 * 1024   # embed files ≤ 10 MB as data URIs
+
+_MEDIA_MIME_MAP = {
+    "photo": "image/jpeg", "video": "video/mp4", "audio": "audio/mpeg",
+    "voice": "audio/ogg", "animation": "video/mp4", "sticker": "image/webp",
+    "video_note": "video/mp4", "document": "application/octet-stream",
+}
+_EXT_MIME_MAP = {
+    ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+    ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+    ".mp4": "video/mp4", ".mov": "video/quicktime", ".avi": "video/x-msvideo",
+    ".mkv": "video/x-matroska", ".webm": "video/webm",
+    ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".wav": "audio/wav",
+    ".m4a": "audio/mp4", ".flac": "audio/flac",
+    ".pdf": "application/pdf",
+}
+
+def _guess_mime(mtype, filename=""):
+    """Return a MIME type string for a media file. Extension wins if known."""
+    _, ext = os.path.splitext((filename or "").lower())
+    return _EXT_MIME_MAP.get(ext) or _MEDIA_MIME_MAP.get(mtype, "application/octet-stream")
+
+def _make_data_uri(file_bytes, mtype, filename=""):
+    mime = _guess_mime(mtype, filename)
+    return f"data:{mime};base64,{base64.b64encode(file_bytes).decode()}"
+
 def _build_export_html(messages, chat_name, media_map, generated_at):
     """
     Build a self-contained Telegram-style HTML export.
-    media_map: dict of {msg_id: "media/filename.ext"} for ZIP exports,
-               empty dict for HTML-only (shows icon + metadata instead).
+    media_map: dict of {msg_id: src_string} where src_string is either
+               a data URI (fully self-contained) or a relative path like
+               "media/filename.ext" (works after ZIP extraction).
+               Empty dict → HTML-only (shows icon + metadata placeholder).
     """
     CSS = """
     *{margin:0;padding:0;box-sizing:border-box}
@@ -2654,7 +2683,7 @@ def export_chat(chat_id):
                         client.download_media(raw_msg, in_memory=True), timeout=60
                     )
                     if data:
-                        media_data[raw_msg.id] = (zip_path, bytes(data))
+                        media_data[raw_msg.id] = (zip_path, bytes(data), mtype, fname)
                 except Exception as e:
                     logger.warning(f"Export ZIP: skipped media msg {raw_msg.id}: {e}")
 
@@ -2725,12 +2754,20 @@ def export_chat(chat_id):
         return resp
 
     import io, zipfile as _zipfile
-    media_map = {mid: info[0] for mid, info in media_data.items()}
+    # Build media_map: embed small files as data URIs so chat.html is fully
+    # self-contained when opened inside the ZIP viewer; large files fall back
+    # to relative paths that work after extraction.
+    media_map = {}
+    for mid, (zip_path, file_bytes, mtype, fname) in media_data.items():
+        if len(file_bytes) <= _DATA_URI_LIMIT:
+            media_map[mid] = _make_data_uri(file_bytes, mtype, fname)
+        else:
+            media_map[mid] = zip_path   # relative path — works after extraction
     html_content = _build_export_html(messages, chat_name, media_map, generated_at)
     buf = io.BytesIO()
     with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
         zf.writestr("chat.html", html_content.encode("utf-8"))
-        for mid, (zip_path, file_bytes) in media_data.items():
+        for mid, (zip_path, file_bytes, mtype, fname) in media_data.items():
             zf.writestr(zip_path, file_bytes)
     buf.seek(0)
     resp = make_response(buf.read())
@@ -2860,7 +2897,23 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
             job.update(filename=f"{safe_name}_export.html", mimetype="text/html; charset=utf-8")
 
         elif fmt == 'zip':
-            media_map = {mid: info[1] for mid, info in tmp_files.items()}
+            # Embed files ≤ 10 MB as data URIs so chat.html is self-contained
+            # when opened inside the ZIP viewer.  Large files use relative paths
+            # that resolve correctly after the ZIP is extracted.
+            media_map = {}
+            for mid, (tmp_path, zip_member) in tmp_files.items():
+                try:
+                    size = os.path.getsize(tmp_path) if os.path.exists(tmp_path) else 0
+                    if 0 < size <= _DATA_URI_LIMIT:
+                        with open(tmp_path, 'rb') as fh:
+                            raw_bytes = fh.read()
+                        _, ext = os.path.splitext(zip_member.lower())
+                        mime = _EXT_MIME_MAP.get(ext, "application/octet-stream")
+                        media_map[mid] = f"data:{mime};base64,{base64.b64encode(raw_bytes).decode()}"
+                    else:
+                        media_map[mid] = zip_member  # relative path for large files
+                except Exception:
+                    media_map[mid] = zip_member
             html_content = _build_export_html(messages, chat_name, media_map, generated_at)
             out_path = os.path.join(EXPORTS_DIR, f"{job_id}.zip")
             with _zipfile.ZipFile(out_path, 'w', _zipfile.ZIP_DEFLATED) as zf:
@@ -3044,6 +3097,66 @@ def export_job_download(job_id):
     if not path or not os.path.exists(path):
         return jsonify({"error": "File missing"}), 404
     return send_file(path, as_attachment=True, download_name=job["filename"], mimetype=job["mimetype"])
+
+
+@app.route("/api/export-job/<job_id>", methods=["DELETE"])
+@api_login_required
+def delete_export_job(job_id):
+    """Remove a single export job from memory and delete its file from disk."""
+    job = export_jobs.pop(job_id, None)
+    if job:
+        path = job.get("path")
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+            except Exception as e:
+                logger.warning(f"delete_export_job: could not remove {path}: {e}")
+        tmp_dir = job.get("_tmp_dir")
+        if tmp_dir and os.path.isdir(tmp_dir):
+            try:
+                __import__("shutil").rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+    return jsonify({"success": True})
+
+
+@app.route("/api/export-jobs/clear-all", methods=["DELETE"])
+@api_login_required
+def clear_all_export_jobs():
+    """Remove all export jobs from memory and delete their files from disk."""
+    ids = list(export_jobs.keys())
+    deleted_files = 0
+    for job_id in ids:
+        job = export_jobs.pop(job_id, None)
+        if not job:
+            continue
+        path = job.get("path")
+        if path and os.path.exists(path):
+            try:
+                os.remove(path)
+                deleted_files += 1
+            except Exception as e:
+                logger.warning(f"clear_all_export_jobs: could not remove {path}: {e}")
+        tmp_dir = job.get("_tmp_dir")
+        if tmp_dir and os.path.isdir(tmp_dir):
+            try:
+                __import__("shutil").rmtree(tmp_dir, ignore_errors=True)
+            except Exception:
+                pass
+    # Also sweep EXPORTS_DIR for any orphaned files
+    try:
+        for fname in os.listdir(EXPORTS_DIR):
+            fpath = os.path.join(EXPORTS_DIR, fname)
+            if os.path.isfile(fpath):
+                try:
+                    os.remove(fpath)
+                    deleted_files += 1
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    logger.info(f"clear_all_export_jobs: removed {deleted_files} file(s)")
+    return jsonify({"success": True, "deleted": deleted_files})
 
 
 if __name__ == "__main__":

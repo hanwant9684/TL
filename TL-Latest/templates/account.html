@@ -450,9 +450,12 @@
                         </label>
                         <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">Format</div>
                         <button class="tb-btn" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('html')" title="Telegram-style chat bubbles, opens in any browser">💬 HTML — Telegram view</button>
-                        <button class="tb-btn green" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('zip')" title="HTML + all photos, videos, and files downloaded">📦 ZIP — with all media</button>
+                        <button class="tb-btn green" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('zip')" title="HTML + all media embedded — opens without extraction">📦 ZIP — with all media</button>
                         <button class="tb-btn" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('txt')" title="Plain text, one message per block">📄 TXT — plain text</button>
-                        <button class="tb-btn" style="width:100%;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('json')" title="Raw structured data for developers">{ } JSON — raw data</button>
+                        <button class="tb-btn" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('json')" title="Raw structured data for developers">{ } JSON — raw data</button>
+                        <div style="border-top:1px solid var(--border);margin-top:4px;padding-top:6px;">
+                            <button class="tb-btn" style="width:100%;justify-content:flex-start;gap:8px;display:flex;color:var(--red,#e05252);" onclick="clearAllExports()" title="Delete all completed export files from the server">🗑 Clear all exports</button>
+                        </div>
                     </div>
                 </div>
                 <div class="sep"></div>
@@ -1513,9 +1516,12 @@ async function _pollExportJob() {
             const dlBtn = document.getElementById('export-download-btn');
             dlBtn.onclick = () => { window.location.href = `/api/export-job-download/${_exportJobId}`; };
             dlBtn.style.display = '';
+            document.getElementById('export-delete-btn').style.display = '';
         } else if (d.status === 'error') {
             pct = 0; detail = d.error || 'Unknown error';
             clearInterval(_exportPollTimer); _exportPollTimer = null;
+            document.getElementById('export-cancel-btn').style.display = 'none';
+            document.getElementById('export-delete-btn').style.display = '';
         }
         _showExportPanel(d.step || d.status, pct, detail);
     } catch(e) { console.error('Export poll:', e); }
@@ -1536,6 +1542,45 @@ function closeExportPanel() {
 function cancelExportJob() {
     closeExportPanel();
     _exportJobId = null;
+    document.getElementById('export-delete-btn').style.display = 'none';
+    document.getElementById('export-download-btn').style.display = 'none';
+    document.getElementById('export-cancel-btn').style.display = '';
+}
+
+async function deleteExportJob() {
+    if (!_exportJobId) return;
+    const btn = document.getElementById('export-delete-btn');
+    btn.disabled = true;
+    try {
+        const r = await fetch(`/api/export-job/${_exportJobId}`, {method: 'DELETE'});
+        if (r.status === 401) { handleAuthExpired(); return; }
+        showToast('Export deleted', 'success');
+        closeExportPanel();
+        _exportJobId = null;
+        document.getElementById('export-delete-btn').style.display = 'none';
+        document.getElementById('export-download-btn').style.display = 'none';
+        document.getElementById('export-cancel-btn').style.display = '';
+    } catch(e) {
+        showToast('Could not delete export', 'error');
+    } finally {
+        btn.disabled = false;
+    }
+}
+
+async function clearAllExports() {
+    document.getElementById('export-menu').style.display = 'none';
+    if (!confirm('Delete all export files from the server? This cannot be undone.')) return;
+    try {
+        const r = await fetch('/api/export-jobs/clear-all', {method: 'DELETE'});
+        if (r.status === 401) { handleAuthExpired(); return; }
+        if (!r.ok) { showToast('Could not clear exports', 'error'); return; }
+        showToast('All exports cleared', 'success');
+        // If the panel was showing a now-deleted job, close it
+        closeExportPanel();
+        _exportJobId = null;
+    } catch(e) {
+        showToast('Could not clear exports', 'error');
+    }
 }
 
 async function doSearch() {
@@ -2175,6 +2220,7 @@ async function clearThumbnailCache() {
         <div class="export-panel-actions">
             <button id="export-cancel-btn" class="tb-btn danger" style="flex:1;" onclick="cancelExportJob()">Cancel</button>
             <button id="export-download-btn" class="tb-btn green" style="flex:1;display:none;" onclick="">⬇ Download</button>
+            <button id="export-delete-btn" class="tb-btn danger" style="display:none;padding:0 10px;" onclick="deleteExportJob()" title="Delete this export file">🗑</button>
         </div>
     </div>
 </div>
