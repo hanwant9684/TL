@@ -234,6 +234,15 @@
         .dl-btn{background:var(--bg-hover);border:1px solid var(--border);padding:2px 7px;border-radius:4px;cursor:pointer;font-size:0.7rem;}
         .dl-btn.dl{color:var(--accent);}
         .dl-btn.del{color:var(--red);}
+        /* Disk stats footer inside the tray */
+        #disk-panel{border-top:1px solid var(--border);padding:10px 14px;font-size:0.72rem;display:none;flex-direction:column;gap:6px;}
+        #disk-panel.open{display:flex;}
+        .disk-row{display:flex;justify-content:space-between;align-items:center;gap:8px;}
+        .disk-label{color:var(--text-muted);}
+        .disk-val{color:var(--text-secondary);font-variant-numeric:tabular-nums;}
+        .disk-clear-btn{background:none;border:1px solid var(--border);color:var(--red,#e05252);cursor:pointer;padding:2px 8px;font-size:0.7rem;border-radius:4px;white-space:nowrap;}
+        .disk-clear-btn:disabled{opacity:0.5;cursor:default;}
+        #disk-panel-toggle.active{color:var(--accent);}
 
         /* Sessions modal */
         .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;}
@@ -427,11 +436,28 @@
         <div style="display:flex;gap:6px;align-items:center;">
             <a id="zip-all-btn" href="/api/downloads/zip" title="Download all completed files as ZIP" style="display:none;background:var(--bg-hover);border:1px solid var(--border);color:var(--green);padding:3px 9px;font-size:0.72rem;border-radius:4px;text-decoration:none;white-space:nowrap;">⬇ ZIP All</a>
             <button id="clear-all-btn" onclick="clearAllDownloads()" title="Delete all downloads" style="display:none;background:none;border:1px solid var(--border);color:var(--red,#e05252);cursor:pointer;padding:3px 9px;font-size:0.72rem;border-radius:4px;white-space:nowrap;">🗑 Clear All</button>
+            <button id="disk-panel-toggle" class="icon-btn" onclick="toggleDiskPanel()" title="Disk usage &amp; cleanup" style="font-size:0.78rem;">🗄</button>
             <button class="icon-btn" onclick="refreshTray()" style="font-size:0.8rem;">↻</button>
             <button onclick="toggleTray()" style="background:none;border:none;color:var(--text-muted);cursor:pointer;font-size:1.1rem;">✕</button>
         </div>
     </div>
     <div id="dl-tray-body"><p style="color:var(--text-muted);font-size:0.78rem;text-align:center;margin:12px 0;">No downloads yet.</p></div>
+    <div id="disk-panel">
+        <div class="disk-row" style="margin-bottom:2px;">
+            <span style="font-weight:600;color:var(--text);">Disk Usage</span>
+            <button class="icon-btn" onclick="fetchDiskStats()" title="Refresh" style="font-size:0.75rem;padding:2px 5px;">↻</button>
+        </div>
+        <div class="disk-row"><span class="disk-label">📥 Downloads</span><span class="disk-val" id="disk-val-downloads">—</span></div>
+        <div class="disk-row"><span class="disk-label">🛡 Preserved media</span><span class="disk-val" id="disk-val-preserved">—</span></div>
+        <div class="disk-row">
+            <span class="disk-label">🖼 Thumbnail cache</span>
+            <span class="disk-val" id="disk-val-thumbs">—</span>
+        </div>
+        <div class="disk-row" style="margin-top:2px;">
+            <span class="disk-label" style="color:var(--text-muted);font-size:0.68rem;">Clears cached previews — they re-fetch on next view</span>
+            <button id="clear-thumb-btn" class="disk-clear-btn" onclick="clearThumbnailCache()">🗑 Clear Thumbs</button>
+        </div>
+    </div>
 </div>
 
 <!-- Offline banner -->
@@ -1901,6 +1927,49 @@ document.getElementById('search-input').addEventListener('keydown', e => { if(e.
         }
     }
 })();
+
+// ── Disk stats panel ──────────────────────────────────────────────────────────
+let diskPanelOpen = false;
+
+function toggleDiskPanel() {
+    diskPanelOpen = !diskPanelOpen;
+    document.getElementById('disk-panel').classList.toggle('open', diskPanelOpen);
+    document.getElementById('disk-panel-toggle').classList.toggle('active', diskPanelOpen);
+    if (diskPanelOpen) fetchDiskStats();
+}
+
+async function fetchDiskStats() {
+    try {
+        const r = await fetch('/api/disk-stats');
+        if (!r.ok) return;
+        const d = await r.json();
+        const set = (id, obj) => {
+            const el = document.getElementById(id);
+            if (el) el.textContent = `${obj.human} (${obj.files} file${obj.files !== 1 ? 's' : ''})`;
+        };
+        set('disk-val-downloads', d.downloads);
+        set('disk-val-preserved', d.preserved_media);
+        set('disk-val-thumbs',    d.thumbnail_cache);
+    } catch(e) {}
+}
+
+async function clearThumbnailCache() {
+    const btn = document.getElementById('clear-thumb-btn');
+    btn.disabled = true;
+    btn.textContent = 'Clearing…';
+    try {
+        const r = await fetch('/api/disk-stats/thumbnails/clear', { method: 'DELETE' });
+        if (!r.ok) { showToast('Could not clear thumbnail cache', 'error'); return; }
+        const d = await r.json();
+        showToast(`Thumbnail cache cleared (${d.deleted} file${d.deleted !== 1 ? 's' : ''})`, 'success');
+        fetchDiskStats();
+    } catch(e) {
+        showToast('Could not clear thumbnail cache', 'error');
+    } finally {
+        btn.disabled = false;
+        btn.textContent = '🗑 Clear Thumbs';
+    }
+}
 </script>
 </body>
 </html>
