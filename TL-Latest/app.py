@@ -2735,9 +2735,14 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
             step_prefix = f"{range_label} — " if range_label else ""
 
             raw, offset_id = [], 0
-            # to_date_ts → use as Pyrogram offset_date (returns msgs before this ts)
-            # Add 1 day so the selected "to" date is fully included
-            offset_date_arg = int(to_date_ts) + 1 if to_date_ts else 0
+            # to_date_ts → use as Pyrogram offset_date (returns msgs before this datetime)
+            # Add 1 day so the selected "to" date is fully included.
+            # Pyrogram requires a datetime object, not a raw int.
+            from datetime import timezone as _tz3
+            if to_date_ts:
+                offset_date_arg = datetime.fromtimestamp(to_date_ts + 86400, tz=_tz3.utc)
+            else:
+                offset_date_arg = None
             done = False
             while not done:
                 batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
@@ -2765,7 +2770,7 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                 raw.extend(batch)
                 offset_id = batch[-1].id
                 # After first batch, clear offset_date so subsequent pages use offset_id only
-                offset_date_arg = 0
+                offset_date_arg = None
                 job['fetched'] = len(raw)
                 job['step'] = f"{step_prefix}Fetching… {len(raw):,} messages"
                 if done:
