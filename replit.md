@@ -1,37 +1,39 @@
 # Telegram Viewer
 
-A Flask web app that connects to Telegram via the [Pyrogram](https://pyrogram.org/) MTProto client. It lets you browse chats, download media, translate messages, and preserve view-once / protected content through a password-protected web UI.
+A Flask + Pyrogram web app for browsing your Telegram account.
 
 ## Stack
-- **Backend:** Python / Flask + Flask-SQLAlchemy
-- **Telegram client:** Pyrogram 2.0 (MTProto)
-- **Database:** SQLite by default (`instance/app.db`); set `DATABASE_URL` for Postgres
-- **Translation:** Groq AI → Gemini → Google Translate (fallback chain)
+- **Python / Flask** — web server (`TL-Latest/app.py`, 3000+ lines)
+- **Pyrogram** — Telegram client library (uses session strings, not interactive login)
+- **SQLite** (default) or **PostgreSQL** — stores sessions, downloads, preserved media
+- **Jinja2 templates** — `TL-Latest/templates/`
 
 ## How to run
-The app starts with:
+The workflow `Start application` runs:
 ```
 cd TL-Latest && python app.py
 ```
-It binds to `0.0.0.0:5000` and is managed by the **Start application** workflow.
+The app serves on port 5000.
 
 ## Required secrets (Replit Secrets)
-| Secret | Description |
+| Secret | Purpose |
 |---|---|
 | `SESSION_SECRET` | Flask session signing key |
-| `API_ID` | Telegram API ID from [my.telegram.org](https://my.telegram.org) |
-| `API_HASH` | Telegram API hash from [my.telegram.org](https://my.telegram.org) |
-| `APP_PASSWORD` | Password for the web UI login screen |
+| `API_ID` | Telegram app ID (from my.telegram.org) |
+| `API_HASH` | Telegram app hash (from my.telegram.org) |
+| `APP_PASSWORD` | Password to access the web UI |
 
 ## Optional secrets
-| Secret | Description |
+| Secret | Purpose |
 |---|---|
-| `DATABASE_URL` | Postgres connection string (defaults to SQLite) |
-| `GROQ_API_KEY` | Groq AI key for AI-powered translation |
-| `GEMINI_API_KEY` | Google Gemini key for AI-powered translation |
-| `PROXY_TYPE` | `socks5` / `socks4` / `http` |
-| `PROXY_HOST` | Proxy hostname |
-| `PROXY_PORT` | Proxy port |
-| `PROXY_USER` / `PROXY_PASS` | Proxy credentials (optional) |
+| `GROQ_API_KEY` | AI translation via Groq (Llama 3) |
+| `GEMINI_API_KEY` | AI translation via Gemini (fallback) |
+| `DATABASE_URL` | PostgreSQL URL (defaults to SQLite `instance/app.db`) |
+
+## Usage
+1. Open the app — you'll see a password login screen.
+2. Enter your `APP_PASSWORD` to sign in.
+3. Paste a Pyrogram session string (`BQC...`) to connect your Telegram account.
+4. Browse chats, download media, translate messages.
 
 ## User preferences

@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Runtime-generated files (may contain user data)
+TL-Latest/server_downloads/
+TL-Latest/server_exports/
+TL-Latest/preserved_media/
+TL-Latest/thumbnail_cache/
+TL-Latest/logs/
+TL-Latest/instance/
+
+# Archives
+*.zip
+
+# Secrets / env
+.env

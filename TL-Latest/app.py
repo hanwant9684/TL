@@ -337,7 +337,9 @@ with app.app_context():
 
 API_ID      = int(os.environ.get("API_ID", "12345"))
 API_HASH    = os.environ.get("API_HASH", "your_api_hash_here")
-APP_PASSWORD = os.environ.get("APP_PASSWORD", "password123")
+APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
+if not APP_PASSWORD:
+    raise RuntimeError("APP_PASSWORD environment variable is not set. Set it in Replit Secrets before starting the app.")
 
 def format_file_size(size_bytes):
     if not size_bytes or size_bytes <= 0:
@@ -347,6 +349,22 @@ def format_file_size(size_bytes):
     p = math.pow(1024, i)
     s = round(size_bytes / p, 2)
     return f"{s} {units[i]}"
+
+import re as _re
+def _sanitize_filename(name: str) -> str:
+    """Return a safe basename — strip path separators, null bytes, and
+    control characters so Telegram-supplied file names cannot escape
+    the intended download/preserve directory."""
+    # Take only the final component (basename), stripping any directory parts
+    name = os.path.basename(name)
+    # Remove null bytes and ASCII control characters
+    name = _re.sub(r'[\x00-\x1f\x7f]', '', name)
+    # Replace Windows-style directory separators that os.path.basename may miss
+    name = name.replace('\\', '').replace('/', '')
+    # Collapse leading dots to avoid hidden-file tricks on Unix
+    name = name.lstrip('.') or 'file'
+    # Trim to a sane length
+    return name[:200]
 
 def get_proxy_config():
     ptype = os.environ.get("PROXY_TYPE", "").lower()
@@ -400,7 +418,7 @@ async def _auto_preserve(client, msg, session_key):
     raw_name = getattr(media_obj, 'file_name', None)
     if not raw_name:
         raw_name = f"{media_type}_{msg.id}{_PRESERVE_EXT.get(media_type, '.bin')}"
-    safe_name = f"{session_key[:8]}_{chat_id}_{msg.id}_{raw_name}"
+    safe_name = f"{session_key[:8]}_{chat_id}_{msg.id}_{_sanitize_filename(raw_name)}"
     dest = os.path.join(PRESERVED_DIR, safe_name)
 
     try:
@@ -831,7 +849,7 @@ async def _download_to_server(download_id, session_str, chat_id, msg_id):
                 elif msg.sticker:    ext = ".webp"
                 elif msg.video_note: ext = ".mp4"
                 file_name = f"file_{msg_id}{ext}"
-            safe_name = f"{download_id}_{file_name}"
+            safe_name = f"{download_id}_{_sanitize_filename(file_name)}"
             dest = os.path.join(DOWNLOADS_DIR, safe_name)
             entry["filename"] = file_name
             entry["safe_name"] = safe_name
