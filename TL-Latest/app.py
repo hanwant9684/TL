@@ -2735,14 +2735,16 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
             step_prefix = f"{range_label} — " if range_label else ""
 
             raw, offset_id = [], 0
-            # to_date_ts → use as Pyrogram offset_date (returns msgs before this datetime)
-            # Add 1 day so the selected "to" date is fully included.
-            # Pyrogram requires a datetime object, not a raw int.
+            # Pyrogram's get_chat_history passes offset_date straight to the raw layer,
+            # which serialises it as an Int. None is not valid there — use the Unix epoch
+            # datetime (timestamp=0) as the "no date filter" sentinel instead.
             from datetime import timezone as _tz3
+            _EPOCH_DT = datetime(1970, 1, 1, tzinfo=_tz3.utc)
             if to_date_ts:
+                # +86400 so the entire selected day is included (cursor starts at next midnight)
                 offset_date_arg = datetime.fromtimestamp(to_date_ts + 86400, tz=_tz3.utc)
             else:
-                offset_date_arg = None
+                offset_date_arg = _EPOCH_DT
             done = False
             while not done:
                 batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
@@ -2769,8 +2771,8 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                     break
                 raw.extend(batch)
                 offset_id = batch[-1].id
-                # After first batch, clear offset_date so subsequent pages use offset_id only
-                offset_date_arg = None
+                # After first batch reset to epoch (= no date filter); pagination continues via offset_id
+                offset_date_arg = _EPOCH_DT
                 job['fetched'] = len(raw)
                 job['step'] = f"{step_prefix}Fetching… {len(raw):,} messages"
                 if done:
