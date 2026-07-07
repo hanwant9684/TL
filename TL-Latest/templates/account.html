@@ -63,7 +63,8 @@
         .dialog-body{flex:1;min-width:0;}
         .dialog-top{display:flex;align-items:center;justify-content:space-between;gap:6px;}
         .dialog-name{font-weight:500;font-size:0.9rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-        .dialog-type-badge{font-size:0.68rem;color:var(--text-muted);flex-shrink:0;}
+        .dialog-username{font-size:0.72rem;color:var(--accent);opacity:0.75;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px;}
+       .dialog-type-badge{font-size:0.68rem;color:var(--text-muted);flex-shrink:0;}
         .unread-badge{background:var(--accent);color:#fff;border-radius:10px;padding:1px 6px;font-size:0.7rem;font-weight:600;flex-shrink:0;}
         .loading-more{text-align:center;padding:10px;color:var(--text-muted);font-size:0.8rem;}
         .dialog-skeleton{pointer-events:none;}
@@ -315,7 +316,7 @@
         </div>
         <div class="dialogs-list" id="dialogs-list">
             {% for dialog in account.dialogs %}
-            <div class="dialog-item" id="dlg-{{ dialog.id }}" onclick="openChat('{{ dialog.id }}', '{{ dialog.name|e }}', {{ dialog.can_manage|lower }}, this)" data-name="{{ dialog.name|lower }}">
+            <div class="dialog-item" id="dlg-{{ dialog.id }}" onclick="openChat('{{ dialog.id }}', '{{ dialog.name|e }}', {{ dialog.can_manage|lower }}, this)" data-name="{{ dialog.name|lower }}{% if dialog.username %} @{{ dialog.username|lower }}{% endif %}">
                 <div class="dialog-avatar {% if dialog.is_channel %}channel{% elif dialog.is_group %}group{% else %}user{% endif %}">
                     {{ dialog.name[0]|upper if dialog.name else '?' }}
                 </div>
@@ -324,6 +325,7 @@
                         <span class="dialog-name">{{ dialog.name }}</span>
                         {% if dialog.unread_count > 0 %}<span class="unread-badge">{{ dialog.unread_count }}</span>{% endif %}
                     </div>
+                    {% if dialog.username %}<div class="dialog-username">@{{ dialog.username }}</div>{% endif %}
                     <div class="dialog-type-badge">{% if dialog.is_channel %}Channel{% elif dialog.is_group %}Group{% else %}User{% endif %}</div>
                 </div>
             </div>
@@ -625,12 +627,14 @@ document.getElementById('dialogs-list').addEventListener('scroll', function() {
 function _dialogItemHTML(d) {
     const type = d.is_channel ? 'channel' : (d.is_group ? 'group' : 'user');
     const label = d.is_channel ? 'Channel' : (d.is_group ? 'Group' : 'User');
+    const usernameEl = d.username ? `<div class="dialog-username">@${esc(d.username)}</div>` : '';
     return `<div class="dialog-avatar ${type}">${(d.name[0]||'?').toUpperCase()}</div>
         <div class="dialog-body">
             <div class="dialog-top">
                 <span class="dialog-name">${esc(d.name)}</span>
                 ${d.unread_count > 0 ? `<span class="unread-badge">${d.unread_count}</span>` : ''}
             </div>
+            ${usernameEl}
             <div class="dialog-type-badge">${label}</div>
         </div>`;
 }
@@ -677,7 +681,7 @@ async function loadMoreDialogs() {
                 const el = document.createElement('div');
                 el.className = 'dialog-item';
                 el.id = `dlg-${d.id}`;
-                el.setAttribute('data-name', d.name.toLowerCase());
+                el.setAttribute('data-name', d.name.toLowerCase() + (d.username ? ' @' + d.username.toLowerCase() : ''));
                 el.onclick = () => openChat(d.id, d.name, d.can_manage, el);
                 el.innerHTML = _dialogItemHTML(d);
                 frag.appendChild(el);
@@ -1396,7 +1400,7 @@ async function doSearch() {
         let prevDate = null;
         const frag = document.createDocumentFragment();
         msgs.forEach(msg => {
-            const d = msg.date ? msg.date.slice(0,10) : null;
+            const d = msg.date ? _istDateKey(msg.date) : null;
             if (d && d !== prevDate) { frag.appendChild(makeDateSep(msg.date)); prevDate = d; }
             frag.appendChild(buildBubble(msg));
         });
@@ -1579,7 +1583,7 @@ async function viewDeletedMessages() {
             wrap.className = 'msg-wrap in';
             wrap.innerHTML = `<div class="bubble in" style="border-left-color:var(--red)">
                 <div class="msg-text">${esc(msg.text)}</div>
-                <div class="msg-meta"><span class="action-btn" style="color:var(--red)">Deleted</span><span class="msg-time">${msg.date ? msg.date.slice(0,16).replace('T',' ') : ''}</span></div>
+                <div class="msg-meta"><span class="action-btn" style="color:var(--red)">Deleted</span><span class="msg-time">${msg.date ? formatTime(msg.date) : ''}</span></div>
             </div>`;
             inner.appendChild(wrap);
         });

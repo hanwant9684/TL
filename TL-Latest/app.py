@@ -926,7 +926,8 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
                 "unread_count": dialog.unread_messages_count,
                 "is_channel": dialog.chat.type.value == "channel",
                 "is_group": dialog.chat.type.value in ["group", "supergroup"],
-                "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"]
+                "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"],
+                "username": getattr(dialog.chat, "username", None) or "",
             })
 
         if session_key:
