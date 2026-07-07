@@ -6,6 +6,7 @@ import asyncio
 import concurrent.futures
 import threading
 import logging
+import hashlib
 from functools import wraps
 from datetime import timedelta, datetime
 import base64
@@ -118,8 +119,18 @@ def translate_with_fallback(text, target_lang, target_name):
 
 DOWNLOADS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_downloads")
 PRESERVED_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preserved_media")
+THUMBNAILS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumbnail_cache")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 os.makedirs(PRESERVED_DIR, exist_ok=True)
+os.makedirs(THUMBNAILS_DIR, exist_ok=True)
+
+# How long to keep downloaded files on disk before auto-cleanup removes them.
+# Override via env var — e.g. DOWNLOAD_MAX_AGE_HOURS=48 keeps files for 2 days.
+DOWNLOAD_MAX_AGE_HOURS   = int(os.environ.get("DOWNLOAD_MAX_AGE_HOURS", "24"))
+# Thumbnail disk cache is cheaper to rebuild, so keep it longer.
+THUMB_CACHE_MAX_AGE_DAYS = int(os.environ.get("THUMB_CACHE_MAX_AGE_DAYS", "7"))
+# How often the background cleanup loop fires (seconds). Default: 1 hour.
+CLEANUP_INTERVAL_SECS    = int(os.environ.get("CLEANUP_INTERVAL_SECS", "3600"))
 
 download_queue = {}
 
@@ -546,6 +557,94 @@ def _startup_restore():
 
 threading.Thread(target=_startup_restore, daemon=True).start()
 
+# ── Background disk cleanup ───────────────────────────────────────────────────
+# Runs immediately on startup (sweeps zip_tmp_ files left by crashed requests)
+# then fires every CLEANUP_INTERVAL_SECS to remove stale downloads and thumbs.
+
+def _run_cleanup():
+    """Delete old files from DOWNLOADS_DIR and THUMBNAILS_DIR + their DB rows."""
+    now = time.time()
+    download_max_age = DOWNLOAD_MAX_AGE_HOURS * 3600
+    thumb_max_age    = THUMB_CACHE_MAX_AGE_DAYS * 86400
+    deleted_disk = deleted_db = deleted_thumbs = 0
+    old_ids = set()
+
+    # ── 1. Downloads dir ──────────────────────────────────────────────────────
+    try:
+        for fname in os.listdir(DOWNLOADS_DIR):
+            fpath = os.path.join(DOWNLOADS_DIR, fname)
+            # Always sweep leftover zip_tmp_ files regardless of age
+            if fname.startswith("zip_tmp_"):
+                try:
+                    os.remove(fpath)
+                    deleted_disk += 1
+                    logger.info(f"[cleanup] Removed stale zip temp: {fname}")
+                except Exception as e:
+                    logger.warning(f"[cleanup] Could not remove zip_tmp {fname}: {e}")
+                continue
+            try:
+                if now - os.path.getmtime(fpath) > download_max_age:
+                    os.remove(fpath)
+                    deleted_disk += 1
+                    # download_id is the part before the first underscore
+                    did = fname.split("_")[0]
+                    if did:
+                        old_ids.add(did)
+            except Exception as e:
+                logger.warning(f"[cleanup] Could not process download file {fname}: {e}")
+    except Exception as e:
+        logger.warning(f"[cleanup] Error scanning downloads dir: {e}")
+
+    # ── 2. Remove DB rows whose disk files were just deleted ──────────────────
+    if old_ids:
+        try:
+            with app.app_context():
+                deleted_db = ServerDownload.query.filter(
+                    ServerDownload.download_id.in_(old_ids)
+                ).delete(synchronize_session=False)
+                db.session.commit()
+        except Exception as e:
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+            logger.warning(f"[cleanup] DB row cleanup failed: {e}")
+
+    # ── 3. Thumbnail disk cache ───────────────────────────────────────────────
+    try:
+        for fname in os.listdir(THUMBNAILS_DIR):
+            fpath = os.path.join(THUMBNAILS_DIR, fname)
+            try:
+                if now - os.path.getmtime(fpath) > thumb_max_age:
+                    os.remove(fpath)
+                    deleted_thumbs += 1
+            except Exception as e:
+                logger.warning(f"[cleanup] Could not remove thumb {fname}: {e}")
+    except Exception as e:
+        logger.warning(f"[cleanup] Error scanning thumbnails dir: {e}")
+
+    if deleted_disk or deleted_db or deleted_thumbs:
+        logger.info(
+            f"[cleanup] Purged {deleted_disk} download file(s), "
+            f"{deleted_db} DB record(s), {deleted_thumbs} thumbnail(s)"
+        )
+
+def _cleanup_loop():
+    # Immediate startup sweep (catches zip_tmp_ orphans from crashed requests)
+    try:
+        _run_cleanup()
+    except Exception as e:
+        logger.warning(f"[cleanup] Startup sweep error: {e}")
+    while True:
+        time.sleep(CLEANUP_INTERVAL_SECS)
+        try:
+            _run_cleanup()
+        except Exception as e:
+            logger.warning(f"[cleanup] Periodic cleanup error: {e}")
+
+threading.Thread(target=_cleanup_loop, daemon=True, name="disk-cleanup").start()
+
 # ── General-purpose TTL cache (dialogs, messages, account info) ───────────────
 
 class _TTLCache:
@@ -600,6 +699,41 @@ def _cache_set(key, value):
             for k in list(_thumb_cache.keys())[:60]:
                 del _thumb_cache[k]
         _thumb_cache[key] = value
+
+# ── Disk thumbnail cache ───────────────────────────────────────────────────────
+# Thumbnails fetched from Telegram are written to THUMBNAILS_DIR so they
+# survive app restarts and don't require another Telegram API round-trip.
+# Two tiny sidecar files per thumbnail: {hash}.bin (raw bytes) + {hash}.mime.
+
+def _thumb_disk_key(cache_key):
+    return hashlib.md5(cache_key.encode()).hexdigest()
+
+def _thumb_disk_read(cache_key):
+    """Return (data_bytes, mime_str) from disk cache, or (None, None) on miss."""
+    h = _thumb_disk_key(cache_key)
+    bin_path  = os.path.join(THUMBNAILS_DIR, f"{h}.bin")
+    mime_path = os.path.join(THUMBNAILS_DIR, f"{h}.mime")
+    try:
+        if os.path.exists(bin_path) and os.path.exists(mime_path):
+            with open(bin_path, "rb") as f:
+                data = f.read()
+            with open(mime_path, "r") as f:
+                mime = f.read().strip()
+            return data, mime
+    except Exception:
+        pass
+    return None, None
+
+def _thumb_disk_write(cache_key, data, mime):
+    """Write thumbnail bytes + mime to disk cache (best-effort, never raises)."""
+    h = _thumb_disk_key(cache_key)
+    try:
+        with open(os.path.join(THUMBNAILS_DIR, f"{h}.bin"), "wb") as f:
+            f.write(data)
+        with open(os.path.join(THUMBNAILS_DIR, f"{h}.mime"), "w") as f:
+            f.write(mime)
+    except Exception as e:
+        logger.debug(f"thumb disk write failed: {e}")
 
 async def _make_semaphore(n):
     return asyncio.Semaphore(n)
@@ -986,6 +1120,12 @@ def media_thumb(chat_id, message_id):
         data, mime = cached
         return Response(data, mimetype=mime, headers={"Cache-Control": "private, max-age=7200"})
 
+    # Disk cache — survives restarts; much faster than a Telegram round-trip.
+    disk_data, disk_mime = _thumb_disk_read(cache_key)
+    if disk_data:
+        _cache_set(cache_key, (disk_data, disk_mime))  # warm in-memory cache too
+        return Response(disk_data, mimetype=disk_mime, headers={"Cache-Control": "private, max-age=7200"})
+
     async def get_thumb():
         async with _thumb_sem:
             try:
@@ -1089,6 +1229,7 @@ def media_thumb(chat_id, message_id):
         if code:
             return jsonify({"error": code, "code": code, "retryable": False}), 404
         _cache_set(cache_key, (data, mime))
+        _thumb_disk_write(cache_key, data, mime)  # persist to disk so restarts skip Telegram
         return Response(data, mimetype=mime, headers={"Cache-Control": "private, max-age=7200"})
     except asyncio.TimeoutError:
         fut.set_exception(asyncio.TimeoutError())
@@ -2038,6 +2179,36 @@ def download_log_file():
         return jsonify({"error": "Log file not found"}), 404
     from flask import send_file
     return send_file(log_path, as_attachment=True, download_name="app.log", mimetype="text/plain")
+
+@app.route("/api/disk-stats")
+@login_required
+def disk_stats():
+    """Return disk usage for all server-managed directories.
+    Lets you monitor storage without SSH access — useful on deployed services."""
+    def _dir_stats(path):
+        total = 0
+        count = 0
+        try:
+            for fname in os.listdir(path):
+                try:
+                    total += os.path.getsize(os.path.join(path, fname))
+                    count += 1
+                except Exception:
+                    pass
+        except Exception:
+            pass
+        return {"files": count, "bytes": total, "human": format_file_size(total)}
+
+    return jsonify({
+        "downloads":       _dir_stats(DOWNLOADS_DIR),
+        "preserved_media": _dir_stats(PRESERVED_DIR),
+        "thumbnail_cache": _dir_stats(THUMBNAILS_DIR),
+        "settings": {
+            "download_max_age_hours":   DOWNLOAD_MAX_AGE_HOURS,
+            "thumb_cache_max_age_days": THUMB_CACHE_MAX_AGE_DAYS,
+            "cleanup_interval_secs":    CLEANUP_INTERVAL_SECS,
+        },
+    })
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
