@@ -2480,13 +2480,14 @@ _EXT_MIME_MAP = {
     ".pdf": "application/pdf",
 }
 
-def _guess_mime(mtype, filename=""):
-    """Return a MIME type string for a media file. Extension wins if known."""
+def _export_guess_mime(mtype, filename=""):
+    """Return a MIME type string for an export media file. Extension wins if known.
+    Named _export_guess_mime to avoid shadowing the existing _guess_mime helper."""
     _, ext = os.path.splitext((filename or "").lower())
     return _EXT_MIME_MAP.get(ext) or _MEDIA_MIME_MAP.get(mtype, "application/octet-stream")
 
 def _make_data_uri(file_bytes, mtype, filename=""):
-    mime = _guess_mime(mtype, filename)
+    mime = _export_guess_mime(mtype, filename)
     return f"data:{mime};base64,{base64.b64encode(file_bytes).decode()}"
 
 def _build_export_html(messages, chat_name, media_map, generated_at):
@@ -3102,21 +3103,27 @@ def export_job_download(job_id):
 @app.route("/api/export-job/<job_id>", methods=["DELETE"])
 @api_login_required
 def delete_export_job(job_id):
-    """Remove a single export job from memory and delete its file from disk."""
-    job = export_jobs.pop(job_id, None)
-    if job:
-        path = job.get("path")
-        if path and os.path.exists(path):
-            try:
-                os.remove(path)
-            except Exception as e:
-                logger.warning(f"delete_export_job: could not remove {path}: {e}")
-        tmp_dir = job.get("_tmp_dir")
-        if tmp_dir and os.path.isdir(tmp_dir):
-            try:
-                __import__("shutil").rmtree(tmp_dir, ignore_errors=True)
-            except Exception:
-                pass
+    """Remove a single export job from memory and delete its file from disk.
+    Refuses to delete a job that is still running to avoid orphaned files."""
+    job = export_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    in_progress = job.get("status") in ("pending", "fetching", "downloading", "building")
+    if in_progress:
+        return jsonify({"error": "Export is still running — cancel it first"}), 409
+    export_jobs.pop(job_id, None)
+    path = job.get("path")
+    if path and os.path.exists(path):
+        try:
+            os.remove(path)
+        except Exception as e:
+            logger.warning(f"delete_export_job: could not remove {path}: {e}")
+    tmp_dir = job.get("_tmp_dir")
+    if tmp_dir and os.path.isdir(tmp_dir):
+        try:
+            __import__("shutil").rmtree(tmp_dir, ignore_errors=True)
+        except Exception:
+            pass
     return jsonify({"success": True})
 
 

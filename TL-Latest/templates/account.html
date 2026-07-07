@@ -1473,6 +1473,7 @@ async function startExportJob(fmt) {
     _showExportPanel(`Starting: ${rangeLabel}…`, 0, '');
     document.getElementById('export-cancel-btn').style.display = '';
     document.getElementById('export-download-btn').style.display = 'none';
+    document.getElementById('export-delete-btn').style.display = 'none';
 
     try {
         const r = await fetch(`/api/export-job/${currentChatId}`, {
@@ -1554,6 +1555,11 @@ async function deleteExportJob() {
     try {
         const r = await fetch(`/api/export-job/${_exportJobId}`, {method: 'DELETE'});
         if (r.status === 401) { handleAuthExpired(); return; }
+        if (!r.ok) {
+            const msg = await r.json().catch(() => ({}));
+            showToast(msg.error || 'Could not delete export', 'error');
+            return;
+        }
         showToast('Export deleted', 'success');
         closeExportPanel();
         _exportJobId = null;
