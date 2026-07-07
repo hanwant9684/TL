@@ -2724,16 +2724,20 @@ def export_chat(chat_id):
 # ── Background export job system ─────────────────────────────────────────────
 
 async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media,
-                          chat_name, safe_name, from_date_ts=None):
+                          chat_name, safe_name, from_date_ts=None, to_date_ts=None):
     """Long-running async export worker — runs in _loop, not in a request thread."""
     job = export_jobs[job_id]
     import zipfile as _zipfile, json as _json, tempfile as _tempfile
     try:
         async def _do(client):
             job['status'] = 'fetching'
-            from_label = job.get('from_date') or ''
-            step_prefix = f"From {from_label} — " if from_label else ""
+            range_label = job.get('range_label') or ''
+            step_prefix = f"{range_label} — " if range_label else ""
+
             raw, offset_id = [], 0
+            # to_date_ts → use as Pyrogram offset_date (returns msgs before this ts)
+            # Add 1 day so the selected "to" date is fully included
+            offset_date_arg = int(to_date_ts) + 1 if to_date_ts else 0
             done = False
             while not done:
                 batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
@@ -2741,7 +2745,10 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                     break
                 batch = []
                 async for m in client.get_chat_history(
-                    chat_id_int, limit=batch_limit, offset_id=offset_id or 0
+                    chat_id_int,
+                    limit=batch_limit,
+                    offset_id=offset_id or 0,
+                    offset_date=offset_date_arg,
                 ):
                     # Stop at from_date boundary (history comes newest→oldest)
                     if from_date_ts is not None:
@@ -2757,8 +2764,10 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                     break
                 raw.extend(batch)
                 offset_id = batch[-1].id
+                # After first batch, clear offset_date so subsequent pages use offset_id only
+                offset_date_arg = 0
                 job['fetched'] = len(raw)
-                job['step'] = f"{step_prefix}Fetching messages… {len(raw):,}"
+                job['step'] = f"{step_prefix}Fetching… {len(raw):,} messages"
                 if done:
                     break
                 if max_msgs != 0 and len(raw) >= max_msgs:
@@ -2919,16 +2928,25 @@ def start_export_job(chat_id):
     max_msgs = 0 if max_raw in ("0", "all") else max(1, int(max_raw))
     skip_media = bool(data.get("skip_media", False))
 
-    # from_date: "YYYY-MM-DD" string → UTC midnight timestamp (float) or None
-    from_date_str = data.get("from_date", "").strip()
-    from_date_ts = None
-    if from_date_str:
+    from datetime import timezone as _tz2
+
+    # from_date / to_date: "YYYY-MM-DD" → UTC midnight timestamp (float) or None
+    def _parse_date_ts(s, end_of_day=False):
+        s = (s or "").strip()
+        if not s:
+            return None
         try:
-            from datetime import timezone as _tz2
-            fd = datetime.strptime(from_date_str, "%Y-%m-%d").replace(tzinfo=_tz2.utc)
-            from_date_ts = fd.timestamp()
+            dt = datetime.strptime(s, "%Y-%m-%d").replace(tzinfo=_tz2.utc)
+            if end_of_day:
+                dt = dt.replace(hour=23, minute=59, second=59)
+            return dt.timestamp()
         except Exception:
-            pass
+            return None
+
+    from_date_str = data.get("from_date", "").strip()
+    to_date_str   = data.get("to_date",   "").strip()
+    from_date_ts  = _parse_date_ts(from_date_str)
+    to_date_ts    = _parse_date_ts(to_date_str, end_of_day=True)
 
     try:
         chat_id_int = int(chat_id)
@@ -2939,17 +2957,23 @@ def start_export_job(chat_id):
         ci = _chat_info_cache.get((sk, chat_id_int))
     chat_name = (ci or {}).get("name", f"chat_{chat_id}")
     safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in chat_name).strip() or f"chat_{chat_id}"
+
+    range_label = ""
+    if from_date_str or to_date_str:
+        range_label = f"{from_date_str or '…'} → {to_date_str or 'now'}"
+
     job_id = str(uuid.uuid4())
     export_jobs[job_id] = {
         "status": "pending", "step": "Starting…",
         "fetched": 0, "total": 0, "media_done": 0, "media_total": 0,
-        "fmt": fmt, "chat_name": chat_name, "from_date": from_date_str,
+        "fmt": fmt, "chat_name": chat_name,
+        "from_date": from_date_str, "to_date": to_date_str, "range_label": range_label,
         "path": None, "filename": None, "mimetype": None, "error": None,
         "created": time.time(),
     }
     asyncio.run_coroutine_threadsafe(
         _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media,
-                        chat_name, safe_name, from_date_ts),
+                        chat_name, safe_name, from_date_ts, to_date_ts),
         _loop
     )
     return jsonify({"job_id": job_id})
