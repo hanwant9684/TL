@@ -132,7 +132,8 @@
         .bubble{max-width:68%;padding:8px 12px;border-radius:12px;position:relative;word-wrap:break-word;}
         .bubble.out{background:var(--bg-msg-out);border-bottom-right-radius:4px;}
         .bubble.in{background:var(--bg-msg-in);border-bottom-left-radius:4px;border-left:3px solid var(--accent);}
-        .sender-name{font-size:0.72rem;font-weight:700;margin-bottom:3px;}
+        .sender-name{font-size:0.72rem;font-weight:700;margin-bottom:1px;}
+        .sender-username{display:block;font-size:0.62rem;font-weight:400;opacity:0.55;margin-bottom:3px;letter-spacing:0.01em;}
         .fwd-label{font-size:0.72rem;color:#5ba3d9;margin-bottom:4px;display:flex;align-items:center;gap:4px;}
         .fwd-label::before{content:'↪';}
         .msg-text{font-size:0.88rem;line-height:1.5;white-space:pre-wrap;word-break:break-word;}
@@ -568,15 +569,38 @@ function esc(s) {
     return d.innerHTML;
 }
 
-function formatDate(ds) {
-    if (!ds) return '';
-    const d = new Date(ds);
-    const today = new Date(), yest = new Date();
-    yest.setDate(today.getDate() - 1);
-    const key = dt => dt.toISOString().slice(0,10);
-    if (key(d) === key(today)) return 'Today';
-    if (key(d) === key(yest)) return 'Yesterday';
-    return d.toLocaleDateString(undefined, {year:'numeric',month:'long',day:'numeric'});
+// ── IST (India Standard Time = UTC+5:30) date/time helpers ──────────────────
+// The server sends dates as UTC ISO strings without a timezone suffix.
+// We append 'Z' to force UTC parsing, then add 19 800 000 ms (5h 30m) for IST.
+function _toIST(dateStr) {
+    if (!dateStr) return null;
+    const ms = Date.parse(
+        (dateStr.includes('Z') || dateStr.includes('+')) ? dateStr : dateStr + 'Z'
+    );
+    return isNaN(ms) ? null : new Date(ms + 19800000);
+}
+function _istDateKey(dateStr) {
+    const d = _toIST(dateStr);
+    if (!d) return '';
+    return `${d.getUTCFullYear()}-${String(d.getUTCMonth()+1).padStart(2,'0')}-${String(d.getUTCDate()).padStart(2,'0')}`;
+}
+function formatTime(dateStr) {
+    const d = _toIST(dateStr);
+    if (!d) return '';
+    return `${String(d.getUTCHours()).padStart(2,'0')}:${String(d.getUTCMinutes()).padStart(2,'0')}`;
+}
+function formatDate(dateStr) {
+    if (!dateStr) return '';
+    const nowIST = _toIST(new Date().toISOString());
+    if (!nowIST) return '';
+    const dKey    = _istDateKey(dateStr);
+    const todayKey = _istDateKey(nowIST.toISOString().replace('Z',''));
+    const yestIST  = new Date(nowIST.getTime() - 86400000);
+    const yestKey  = _istDateKey(yestIST.toISOString().replace('Z',''));
+    if (dKey === todayKey) return 'Today';
+    if (dKey === yestKey)  return 'Yesterday';
+    const d = _toIST(dateStr);
+    return d ? d.toLocaleDateString('en-IN', {year:'numeric',month:'long',day:'numeric',timeZone:'UTC'}) : '';
 }
 
 // ── Sidebar infinite scroll ──
@@ -677,7 +701,9 @@ function filterDialogs(q) {
 
 // ── Open Chat ──
 // ── Chat protection state ──
-let _protectedChats = new Set();
+// Pre-seeded from server-rendered data — no extra API call on page load.
+// _loadProtectedChats() is kept so toggleProtection() can re-sync if needed.
+let _protectedChats = new Set({{ protected_chats | tojson }}.map(String));
 
 async function _loadProtectedChats() {
     try {
@@ -687,7 +713,6 @@ async function _loadProtectedChats() {
         _protectedChats = new Set((d.protected_chats || []).map(String));
     } catch {}
 }
-_loadProtectedChats();
 
 function _updateProtectBtn(chatId) {
     const btn = document.getElementById('protect-btn');
@@ -815,7 +840,7 @@ async function loadMessages(fresh = false) {
 
             const preFrag = document.createDocumentFragment();
             sorted.forEach(msg => {
-                const d = msg.date ? msg.date.slice(0,10) : null;
+                const d = msg.date ? _istDateKey(msg.date) : null;
                 if (d && d !== prevDate) {
                     preFrag.appendChild(makeDateSep(msg.date));
                     prevDate = d;
@@ -836,7 +861,7 @@ async function loadMessages(fresh = false) {
         } else {
             // Fresh load — figure out existing dates
             sorted.forEach(msg => {
-                const d = msg.date ? msg.date.slice(0,10) : null;
+                const d = msg.date ? _istDateKey(msg.date) : null;
                 if (d && d !== prevDate) {
                     frag.appendChild(makeDateSep(msg.date));
                     prevDate = d;
@@ -1195,7 +1220,7 @@ document.getElementById('chat-messages').addEventListener('scroll', function() {
 function makeDateSep(dateStr) {
     const el = document.createElement('div');
     el.className = 'date-sep';
-    el.setAttribute('data-date', dateStr ? dateStr.slice(0,10) : '');
+    el.setAttribute('data-date', _istDateKey(dateStr));
     el.innerHTML = `<span>${formatDate(dateStr)}</span>`;
     return el;
 }
@@ -1237,7 +1262,7 @@ function buildBubble(msg) {
 
 function buildBubbleHTML(msg) {
     const senderLine = (!msg.is_outgoing && msg.sender_name) ?
-        `<div class="sender-name" style="color:${esc(senderColor(msg.sender_key||''))}">${esc(msg.sender_name)}</div>` : '';
+        `<div class="sender-name" style="color:${esc(senderColor(msg.sender_key||''))}">${esc(msg.sender_name)}${msg.sender_username ? `<span class="sender-username">@${esc(msg.sender_username)}</span>` : ''}</div>` : '';
     const fwdLine = msg.forward_from ?
         `<div class="fwd-label">Forwarded from ${esc(msg.forward_from)}</div>` : '';
     const textLine = msg.text ? `<div class="msg-text">${esc(msg.text)}</div>` : '';
@@ -1328,7 +1353,7 @@ function buildBubbleHTML(msg) {
     return `${senderLine}${fwdLine}${textLine}${mediaHtml}
         <div class="msg-meta">
             ${translateBtn}${deleteBtn}
-            <span class="msg-time">${msg.date ? msg.date.slice(11,16) : ''}</span>
+            <span class="msg-time">${formatTime(msg.date)}</span>
         </div>`;
 }
 

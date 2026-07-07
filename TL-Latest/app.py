@@ -930,6 +930,20 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
             })
 
         if session_key:
+            # Pre-fill chat info cache from dialog data so the first openChat()
+            # → loadMessages() call for any dialog skips the get_chat() round-trip
+            # entirely — we already know the name and type from get_dialogs().
+            _now = time.time()
+            with _chat_info_lock:
+                for _d in all_dialogs:
+                    _ck = (session_key, _d["id"])
+                    if _ck not in _chat_info_cache or _chat_info_cache[_ck].get("exp", 0) < _now:
+                        _chat_info_cache[_ck] = {
+                            "name": _d["name"],
+                            "can_manage": _d["can_manage"],
+                            "exp": _now + _CHAT_INFO_TTL,
+                        }
+
             with _dialog_snapshot_lock:
                 _dialog_snapshots[session_key] = {
                     "items": all_dialogs,
@@ -958,15 +972,25 @@ async def get_account_info(session_string):
     try:
         async def _do(client):
             me = await client.get_me()
-            profile_photo = None
-            if me.photo:
+            # Parallelize profile photo download + dialog fetch — both are
+            # independent of each other after get_me() resolves.
+            # Use small_file_id: the sidebar avatar renders at 38×38 px; the
+            # big photo (640×640) wastes bandwidth and a Telegram call quota slot.
+            async def _get_photo():
+                if not me.photo:
+                    return None
                 try:
-                    data = await client.download_media(me.photo.big_file_id, in_memory=True)
+                    data = await client.download_media(me.photo.small_file_id, in_memory=True)
                     if data:
-                        profile_photo = base64.b64encode(data.getvalue()).decode('utf-8')
+                        return base64.b64encode(data.getvalue()).decode('utf-8')
                 except Exception:
                     pass
-            dialogs = await get_dialogs_list(client, offset=0, session_key=sk)
+                return None
+
+            profile_photo, dialogs = await asyncio.gather(
+                _get_photo(),
+                get_dialogs_list(client, offset=0, session_key=sk),
+            )
             return {
                 "id": me.id,
                 "first_name": me.first_name or "",
@@ -997,26 +1021,27 @@ def _extract_forward(msg):
     return None
 
 def _extract_sender(msg):
+    """Return (display_name, sender_key, username_or_None) for incoming messages."""
     u = getattr(msg, 'from_user', None)
     if u:
         parts = [p for p in [getattr(u, 'first_name', None), getattr(u, 'last_name', None)] if p]
         name = " ".join(parts) if parts else (f"@{u.username}" if getattr(u, 'username', None) else f"User {u.id}")
-        return name, str(u.id)
+        return name, str(u.id), getattr(u, 'username', None)
     sc = getattr(msg, 'sender_chat', None)
     if sc:
         name = getattr(sc, 'title', None) or getattr(sc, 'username', None) or f"Chat {sc.id}"
-        return name, str(sc.id)
+        return name, str(sc.id), getattr(sc, 'username', None)
     sig = getattr(msg, 'author_signature', None) or getattr(msg, 'post_author', None)
     if sig:
-        return sig, sig
-    return None, None
+        return sig, sig, None
+    return None, None, None
 
 PREVIEW_KINDS = {"photo", "video", "audio", "voice", "sticker", "animation", "video_note"}
 
 def _build_msg_dict(msg):
     media_type = msg.media.value if msg.media else None
     downloadable = media_type in DOWNLOADABLE_MEDIA if media_type else False
-    sender_name, sender_key = _extract_sender(msg) if not msg.outgoing else (None, None)
+    sender_name, sender_key, sender_username = _extract_sender(msg) if not msg.outgoing else (None, None, None)
 
     preview_kind = media_type if media_type in PREVIEW_KINDS else None
     mime_type = None
@@ -1032,6 +1057,7 @@ def _build_msg_dict(msg):
         "forward_from": _extract_forward(msg),
         "sender_name": sender_name,
         "sender_key": sender_key,
+        "sender_username": sender_username,
     }
     if downloadable:
         try:
@@ -2172,7 +2198,14 @@ def view_account():
     except Exception as e:
         logger.error(f"Failed to persist session: {e}")
 
-    return render_template("account.html", account=result)
+    # Pass protected chat IDs so the template can initialise the JS Set without
+    # an extra API round-trip on every page load.
+    try:
+        protected_ids = [r.chat_id for r in ProtectedChat.query.filter_by(
+            session_key=session_string[:16]).all()]
+    except Exception:
+        protected_ids = []
+    return render_template("account.html", account=result, protected_chats=protected_ids)
 
 @app.route("/api/stored-sessions", methods=["GET"])
 @api_login_required
