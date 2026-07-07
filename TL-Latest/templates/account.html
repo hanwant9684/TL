@@ -1126,7 +1126,7 @@ const lazyObserver = new IntersectionObserver((entries) => {
             lazyObserver.unobserve(el);
         }
     });
-}, { root: document.getElementById('chat-messages'), rootMargin: '400px' });
+}, { root: document.getElementById('chat-messages'), rootMargin: '120px' });
 
 function observeLazy(container) {
     (container || document).querySelectorAll('[data-lazy-src]').forEach(el => lazyObserver.observe(el));

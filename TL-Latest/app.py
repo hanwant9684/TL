@@ -7,6 +7,8 @@ import concurrent.futures
 import threading
 import logging
 import hashlib
+import random
+import gzip as _gzip
 from functools import wraps
 from datetime import timedelta, datetime
 import base64
@@ -190,6 +192,10 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 from pyrogram import Client, filters as pyro_filters
+try:
+    from pyrogram.errors import FloodWait as _FloodWait
+except ImportError:
+    _FloodWait = None
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("SECRET_KEY")
@@ -367,19 +373,19 @@ async def _auto_preserve(client, msg, session_key):
     # Detect view-once (ttl_seconds set on the media object)
     is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
 
-    # Check if chat is protected
+    # Use in-memory protected-chat set to avoid a DB round-trip on every message.
+    # The set is loaded from DB once per session and stays hot in memory.
+    is_protected = chat_id in _get_protected_set(session_key)
+
+    if not is_view_once and not is_protected:
+        return
+
+    # Skip if already preserved — DB check only happens when we actually need it.
     with app.app_context():
-        is_protected = ProtectedChat.query.filter_by(
-            session_key=session_key, chat_id=chat_id
-        ).first() is not None
-        # Skip if already preserved
         if PreservedMedia.query.filter_by(
             session_key=session_key, chat_id=chat_id, message_id=msg.id
         ).first():
             return
-
-    if not is_view_once and not is_protected:
-        return
 
     reason = "view_once" if is_view_once else "protected"
     raw_name = getattr(media_obj, 'file_name', None)
@@ -446,11 +452,13 @@ def create_telegram_client(session_string):
                 db.session.commit()
         except Exception as e:
             logger.error(f"Error logging message: {e}")
-        # Invalidate TTL caches so new messages appear immediately
+        # Invalidate caches so new messages appear immediately.
+        # Also wipe the dialog snapshot — new message may have moved a dialog
+        # to the top of the list.
         try:
             chat_id = m.chat.id if m.chat else None
             if chat_id:
-                _api_cache.delete_prefix(f"dialogs:{session_key}")
+                _invalidate_dialog_cache(session_key)
                 _api_cache.delete(f"msgs:{session_key}:{chat_id}")
                 _api_cache.delete(f"acct:{session_key}")
         except Exception:
@@ -462,8 +470,19 @@ def create_telegram_client(session_string):
 
     @client.on_message(pyro_filters.outgoing)
     async def save_outgoing(c, m):
-        """Also preserve YOUR OWN sent media in protected chats."""
+        """Preserve YOUR OWN sent media — but ONLY in protected chats.
+
+        Previously this ran _auto_preserve for every outgoing message regardless
+        of chat, which caused unnecessary Telegram download calls.  We now check
+        the in-memory protected-chat set first and bail early.
+        """
         try:
+            chat_id = m.chat.id if m.chat else None
+            if not chat_id:
+                return
+            # Fast in-memory check — no DB round-trip on every outgoing message.
+            if chat_id not in _get_protected_set(session_key):
+                return
             await _auto_preserve(c, m, session_key)
         except Exception as e:
             logger.error(f"Auto-preserve outgoing error: {e}")
@@ -583,6 +602,53 @@ class _TTLCache:
 
 _api_cache = _TTLCache()
 
+# ── Dialog snapshot — one full fetch per session, sliced for pagination ────────
+# Pyrogram has no server-side offset for get_dialogs(), so every paginated call
+# used to re-scan from the beginning. We fetch ALL dialogs once, cache the full
+# list, and serve slices from memory. Invalidated on new message or manual refresh.
+_dialog_snapshots: dict = {}       # session_key -> {"items": [...], "expires": float}
+_dialog_snapshot_lock = threading.Lock()
+_DIALOG_SNAPSHOT_TTL = 900         # 15 min
+
+# In-flight guard: prevents concurrent requests from all firing a full
+# get_dialogs() scan simultaneously when the snapshot is cold.  The first
+# request that finds no snapshot sets its Future here; others wait on it.
+_dialog_fetch_inflight: dict = {}  # session_key -> concurrent.futures.Future
+_dialog_fetch_inflight_lock = threading.Lock()
+
+def _invalidate_dialog_cache(session_key: str):
+    """Clear both the per-page TTL cache and the full-list snapshot."""
+    _api_cache.delete_prefix(f"dialogs:{session_key}")
+    with _dialog_snapshot_lock:
+        _dialog_snapshots.pop(session_key, None)
+
+# ── Chat info cache — avoids an extra get_chat() round-trip per message load ──
+_chat_info_cache: dict = {}        # (session_key, chat_id) -> {"name":str,"can_manage":bool,"exp":float}
+_chat_info_lock = threading.Lock()
+_CHAT_INFO_TTL = 3600              # 1 hour
+
+# ── Protected chats — memory set so _auto_preserve skips DB on every message ──
+_protected_chats_mem: dict = {}    # session_key -> set[int] | None=unloaded
+_protected_chats_mem_lock = threading.Lock()
+
+def _get_protected_set(session_key: str) -> set:
+    """Return the set of protected chat_ids for session_key (loads from DB once)."""
+    with _protected_chats_mem_lock:
+        s = _protected_chats_mem.get(session_key)
+        if s is not None:
+            return s
+    with app.app_context():
+        rows = ProtectedChat.query.filter_by(session_key=session_key).all()
+        result = {r.chat_id for r in rows}
+    with _protected_chats_mem_lock:
+        _protected_chats_mem[session_key] = result
+    return result
+
+# ── Translation cache — avoids re-hitting AI APIs for identical requests ──────
+_translation_cache: dict = {}      # (text_md5, target_lang) -> (translated, engine)
+_translation_cache_lock = threading.Lock()
+_TRANSLATION_CACHE_MAX = 500
+
 # ── Thumbnail cache & concurrency guards ──────────────────────────────────────
 
 THUMB_CACHE_MAX = 300
@@ -613,17 +679,22 @@ def _thumb_disk_key(cache_key):
     return hashlib.md5(cache_key.encode()).hexdigest()
 
 def _thumb_disk_read(cache_key):
-    """Return (data_bytes, mime_str) from disk cache, or (None, None) on miss."""
+    """Return (data_bytes, mime_str) from disk cache, or (None, None) on miss.
+
+    Uses try/open directly instead of os.path.exists + open — removes two extra
+    syscalls on every cache miss and avoids a TOCTOU race.
+    """
     h = _thumb_disk_key(cache_key)
     bin_path  = os.path.join(THUMBNAILS_DIR, f"{h}.bin")
     mime_path = os.path.join(THUMBNAILS_DIR, f"{h}.mime")
     try:
-        if os.path.exists(bin_path) and os.path.exists(mime_path):
-            with open(bin_path, "rb") as f:
-                data = f.read()
-            with open(mime_path, "r") as f:
-                mime = f.read().strip()
-            return data, mime
+        with open(bin_path, "rb") as f:
+            data = f.read()
+        with open(mime_path, "r") as f:
+            mime = f.read().strip()
+        return data, mime
+    except (FileNotFoundError, OSError):
+        pass
     except Exception:
         pass
     return None, None
@@ -687,12 +758,37 @@ async def get_client(session_string, force_reconnect=False):
     return telegram_clients[session_string]
 
 async def run_with_reconnect(session_string, coro_factory):
-    for attempt in range(2):
+    """Run coro_factory(client) with automatic retry on broken-pipe and FloodWait.
+
+    FloodWait strategy: sleep the exact wait Telegram demands + a small random
+    jitter (1-3 s), then retry — up to 3 times before giving up.
+
+    Broken-pipe strategy: force-reconnect the client once.  Tracked independently
+    from FloodWait so a broken-pipe that follows a FloodWait sleep still gets its
+    reconnect attempt (prior code only allowed it on attempt == 0).
+    """
+    flood_attempts = 0
+    broken_pipe_retried = False
+    for attempt in range(7):
         try:
-            client = await get_client(session_string, force_reconnect=(attempt > 0))
+            # Force-reconnect on broken-pipe retry; NOT on FloodWait retries
+            # (those reuse the same connection — force-reconnect is unnecessary
+            # and would waste the session-start handshake time).
+            force = broken_pipe_retried and attempt > 0
+            client = await get_client(session_string, force_reconnect=force)
             return await coro_factory(client)
         except Exception as e:
-            if _is_broken_pipe(e) and attempt == 0:
+            if _FloodWait and isinstance(e, _FloodWait):
+                flood_attempts += 1
+                if flood_attempts > 3:
+                    raise
+                wait_s = max(getattr(e, 'value', 30), 1) + random.uniform(1, 3)
+                logger.warning(f"FloodWait {getattr(e, 'value', '?')}s — sleeping {wait_s:.1f}s "
+                               f"(flood attempt {flood_attempts}/3)")
+                await asyncio.sleep(wait_s)
+                continue
+            if _is_broken_pipe(e) and not broken_pipe_retried:
+                broken_pipe_retried = True
                 continue
             raise
 
@@ -784,32 +880,74 @@ DIALOGS_PAGE_SIZE = 100  # Fetch chats/channels in bigger batches so each scroll
                           # request instead of 20 means 5x fewer round trips.
 
 async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_key=None):
-    cache_key = f"dialogs:{session_key}:{offset}:{limit}" if session_key else None
-    if cache_key:
-        cached = _api_cache.get(cache_key)
-        if cached is not None:
-            return cached
-    dialogs = []
-    count = 0
-    async for dialog in client.get_dialogs():
-        if count < offset:
-            count += 1
-            continue
-        dialogs.append({
-            "name": dialog.chat.title or dialog.chat.first_name or "Unknown",
-            "id": dialog.chat.id,
-            "unread_count": dialog.unread_messages_count,
-            "is_channel": dialog.chat.type.value == "channel",
-            "is_group": dialog.chat.type.value in ["group", "supergroup"],
-            "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"]
-        })
-        if len(dialogs) >= limit:
-            break
-    if cache_key:
-        _api_cache.set(cache_key, dialogs, ttl=900)  # 15 min — bigger pages, so
-                                                       # keep them around longer
-                                                       # to avoid re-hitting Telegram
-    return dialogs
+    """Return a page of dialogs.
+
+    Uses a full-list snapshot so every paginated scroll request is served from
+    memory instead of re-scanning from the beginning of get_dialogs() each time.
+    The snapshot is invalidated by _invalidate_dialog_cache() whenever a new
+    message arrives or the cache is manually cleared.
+
+    In-flight guard: only ONE coroutine fires the full Telegram get_dialogs()
+    scan at a time.  Concurrent requests that miss the snapshot wait for the
+    in-progress fetch to complete, then read the result from the snapshot.
+    This prevents a burst of simultaneous cache misses (e.g. on first load)
+    from each triggering a full scan — which would hammer Telegram's rate limits.
+    """
+    if session_key:
+        now = datetime.utcnow().timestamp()
+        with _dialog_snapshot_lock:
+            snap = _dialog_snapshots.get(session_key)
+            if snap and snap["expires"] > now:
+                return snap["items"][offset:offset + limit]
+
+        # Check/register in-flight guard
+        with _dialog_fetch_inflight_lock:
+            fut = _dialog_fetch_inflight.get(session_key)
+            is_owner = fut is None
+            if is_owner:
+                fut = concurrent.futures.Future()
+                _dialog_fetch_inflight[session_key] = fut
+
+        if not is_owner:
+            # Another coroutine is already fetching — wait for it, then slice
+            try:
+                all_dialogs = fut.result(timeout=120)
+            except Exception:
+                all_dialogs = []
+            return all_dialogs[offset:offset + limit]
+
+    try:
+        # No valid snapshot and we are the owner — fetch ALL dialogs from Telegram.
+        all_dialogs = []
+        async for dialog in client.get_dialogs():
+            all_dialogs.append({
+                "name": dialog.chat.title or dialog.chat.first_name or "Unknown",
+                "id": dialog.chat.id,
+                "unread_count": dialog.unread_messages_count,
+                "is_channel": dialog.chat.type.value == "channel",
+                "is_group": dialog.chat.type.value in ["group", "supergroup"],
+                "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"]
+            })
+
+        if session_key:
+            with _dialog_snapshot_lock:
+                _dialog_snapshots[session_key] = {
+                    "items": all_dialogs,
+                    "expires": datetime.utcnow().timestamp() + _DIALOG_SNAPSHOT_TTL,
+                }
+            with _dialog_fetch_inflight_lock:
+                if session_key in _dialog_fetch_inflight:
+                    _dialog_fetch_inflight[session_key].set_result(all_dialogs)
+                    del _dialog_fetch_inflight[session_key]
+
+        return all_dialogs[offset:offset + limit]
+    except Exception as exc:
+        if session_key:
+            with _dialog_fetch_inflight_lock:
+                f = _dialog_fetch_inflight.pop(session_key, None)
+            if f:
+                f.set_exception(exc)
+        raise
 
 async def get_account_info(session_string):
     sk = session_string[:16]
@@ -927,19 +1065,39 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
 
     try:
         async def _do(client):
-            chat = None
-            try:
-                chat = await client.get_chat(chat_id)
-            except Exception as e:
-                logger.warning(f"get_chat failed for {chat_id}: {e}")
-                # get_chat can fail with PEER_ID_INVALID if the Pyrogram session
-                # hasn't cached the access hash yet — but get_chat_history often
-                # still works. Continue with a fallback name instead of bailing.
+            # Chat metadata (name + can_manage) is cached for 1 hour so we don't
+            # fire an extra get_chat() round-trip on every uncached message fetch.
+            now = time.time()
+            ck = (sk, chat_id)
+            with _chat_info_lock:
+                ci = _chat_info_cache.get(ck)
+            if ci and ci["exp"] > now:
+                chat_name  = ci["name"]
+                can_manage = ci["can_manage"]
+            else:
+                chat = None
+                try:
+                    chat = await client.get_chat(chat_id)
+                except Exception as e:
+                    logger.warning(f"get_chat failed for {chat_id}: {e}")
+                    # get_chat can fail with PEER_ID_INVALID if the Pyrogram session
+                    # hasn't cached the access hash yet — but get_chat_history often
+                    # still works. Continue with a fallback name instead of bailing.
+                chat_name = (
+                    (getattr(chat, "title", None) or getattr(chat, "first_name", None))
+                    if chat else None
+                ) or "Chat"
+                can_manage = (
+                    getattr(chat.type, "value", "") in ["channel", "group", "supergroup"]
+                    if chat else False
+                )
+                with _chat_info_lock:
+                    _chat_info_cache[ck] = {
+                        "name": chat_name,
+                        "can_manage": can_manage,
+                        "exp": now + _CHAT_INFO_TTL,
+                    }
 
-            chat_name = (
-                (getattr(chat, "title", None) or getattr(chat, "first_name", None))
-                if chat else None
-            ) or "Chat"
             messages = []
             has_more = False
 
@@ -956,7 +1114,9 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
             elif media_only:
                 count = 0
                 try:
-                    async for msg in client.get_chat_history(chat_id, limit=1500, offset_id=offset_id if offset_id > 0 else 0):
+                    # Scan in windows of 200 to avoid a single 1500-message Telegram
+                    # request — large scans trigger FloodWait on busy accounts.
+                    async for msg in client.get_chat_history(chat_id, limit=200, offset_id=offset_id if offset_id > 0 else 0):
                         if not msg.media:
                             continue
                         if (msg.media.value if msg.media else None) not in DOWNLOADABLE_MEDIA:
@@ -980,9 +1140,6 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                     if not messages:
                         return {"error": f"Could not load messages: {e}"}
 
-            can_manage = False
-            if chat:
-                can_manage = getattr(chat.type, "value", "") in ["channel", "group", "supergroup"]
             return {
                 "messages": messages,
                 "chat_name": chat_name,
@@ -1195,19 +1352,13 @@ def media_stream(chat_id, message_id):
             q = _q.Queue(maxsize=20)
 
             async def producer():
+                # msg was already fetched by get_info() above — reuse it here
+                # instead of calling get_messages() a second time.
                 async with _stream_sem:
-                    try:
-                        peer_id = int(chat_id)
-                    except Exception:
-                        peer_id = chat_id
-
                     async def _do(client):
-                        m = await asyncio.wait_for(
-                            client.get_messages(peer_id, int(message_id)), timeout=8
-                        )
-                        if not m or not m.media:
+                        if not msg or not msg.media:
                             return
-                        async for chunk in client.stream_media(m):
+                        async for chunk in client.stream_media(msg):
                             while True:
                                 try:
                                     q.put(chunk, block=True, timeout=2.0)
@@ -1691,8 +1842,23 @@ def translate_route():
     if not text:
         return jsonify({"error": "No text"}), 400
     target_name = LANG_NAMES.get(target_lang, target_lang)
+
+    # Cache identical translation requests — avoids re-hitting AI APIs for the
+    # same text in the same session (e.g. "translate all" hitting repeated phrases).
+    t_key = (hashlib.md5(text.encode()).hexdigest(), target_lang)
+    with _translation_cache_lock:
+        hit = _translation_cache.get(t_key)
+    if hit:
+        return jsonify({"translated": hit[0], "engine": hit[1] + " (cached)"})
+
     try:
         translated, engine = translate_with_fallback(text, target_lang, target_name)
+        with _translation_cache_lock:
+            if len(_translation_cache) >= _TRANSLATION_CACHE_MAX:
+                # Evict oldest 10 % (simple FIFO approximation)
+                for k in list(_translation_cache.keys())[:_TRANSLATION_CACHE_MAX // 10]:
+                    del _translation_cache[k]
+            _translation_cache[t_key] = (translated, engine)
         return jsonify({"translated": translated, "engine": engine})
     except ValueError as e:
         logger.error(f"Translation failed: {e}")
@@ -1727,29 +1893,12 @@ def download_media_route(chat_id, message_id):
     if not session_str:
         return "No session", 400
 
-    async def generate_download():
-        client = await get_client(session_str)
-        try:
-            peer_id = int(chat_id)
-        except Exception:
-            peer_id = chat_id
-        try:
-            msg = await client.get_messages(peer_id, int(message_id))
-            if not msg or not msg.media:
-                return
-            async for chunk in client.stream_media(msg):
-                yield chunk
-        except Exception as e:
-            logger.error(f"Stream error: {e}")
-            if "Broken pipe" in str(e) or "Session" in str(e):
-                if session_str in telegram_clients:
-                    try:
-                        await telegram_clients[session_str].stop()
-                    except Exception:
-                        pass
-                    del telegram_clients[session_str]
-
     async def get_file_info():
+        """Fetch the message once; return (file_name, file_size, msg).
+
+        The returned msg object is reused by stream_wrapper so we don't make a
+        second get_messages() call for the same download request.
+        """
         try:
             client = await get_client(session_str)
             try:
@@ -1758,7 +1907,7 @@ def download_media_route(chat_id, message_id):
                 peer_id = chat_id
             msg = await client.get_messages(peer_id, int(message_id))
             if not msg or not msg.media:
-                return None, None
+                return None, None, None
             media = getattr(msg, msg.media.value)
             file_name = getattr(media, "file_name", None)
             if not file_name:
@@ -1773,15 +1922,34 @@ def download_media_route(chat_id, message_id):
                     elif "image" in mime: ext = ".jpg"
                     elif "audio" in mime: ext = ".mp3"
                 file_name = f"download_{message_id}{ext}"
-            return file_name, getattr(media, "file_size", None)
+            return file_name, getattr(media, "file_size", None), msg
         except Exception as e:
             logger.error(f"File info error: {e}")
             raise
 
     try:
-        file_name, file_size = run_async(get_file_info())
+        file_name, file_size, fetched_msg = run_async(get_file_info())
         if not file_name:
             return "File not found", 404
+
+        # Now define the stream generator that closes over fetched_msg — no
+        # second get_messages() call needed.
+        async def generate_download():
+            client = await get_client(session_str)
+            try:
+                if not fetched_msg or not fetched_msg.media:
+                    return
+                async for chunk in client.stream_media(fetched_msg):
+                    yield chunk
+            except Exception as e:
+                logger.error(f"Stream error: {e}")
+                if "Broken pipe" in str(e) or "Session" in str(e):
+                    if session_str in telegram_clients:
+                        try:
+                            await telegram_clients[session_str].stop()
+                        except Exception:
+                            pass
+                        del telegram_clients[session_str]
 
         def stream_wrapper():
             import queue
@@ -1859,6 +2027,10 @@ def protect_chat(chat_id):
     if not ProtectedChat.query.filter_by(session_key=sk, chat_id=cid).first():
         db.session.add(ProtectedChat(session_key=sk, chat_id=cid))
         db.session.commit()
+    # Update in-memory set so _auto_preserve sees the change immediately
+    with _protected_chats_mem_lock:
+        if sk in _protected_chats_mem:
+            _protected_chats_mem[sk].add(cid)
     return jsonify({"success": True, "protected": True})
 
 @app.route("/api/protected-chats/<chat_id>", methods=["DELETE"])
@@ -1872,6 +2044,10 @@ def unprotect_chat(chat_id):
         return jsonify({"error": "Invalid chat_id"}), 400
     ProtectedChat.query.filter_by(session_key=sk, chat_id=cid).delete()
     db.session.commit()
+    # Remove from in-memory set
+    with _protected_chats_mem_lock:
+        if sk in _protected_chats_mem:
+            _protected_chats_mem[sk].discard(cid)
     return jsonify({"success": True, "protected": False})
 
 @app.route("/api/preserved", methods=["GET"])
@@ -2131,6 +2307,36 @@ def clear_thumbnail_cache():
         _thumb_cache.clear()
     logger.info(f"clear_thumbnail_cache: removed {deleted} file(s) ({errors} error(s))")
     return jsonify({"success": True, "deleted": deleted, "errors": errors})
+
+# ── Gzip compression for JSON / text API responses ────────────────────────────
+# Compresses dialogs, messages, account, and other JSON payloads — large dialog
+# lists can be 50-80 KB uncompressed; gzip brings them to ~10-15 KB, cutting
+# page-load network time substantially on slow connections.
+
+@app.after_request
+def compress_response(response):
+    if (response.status_code < 200 or response.status_code >= 300
+            or response.direct_passthrough
+            or 'Content-Encoding' in response.headers):
+        return response
+    accept_encoding = request.headers.get('Accept-Encoding', '')
+    if 'gzip' not in accept_encoding:
+        return response
+    content_type = response.content_type or ''
+    if not any(t in content_type for t in ('json', 'text', 'javascript', 'html')):
+        return response
+    data = response.get_data()
+    if len(data) < 500:  # not worth compressing tiny responses
+        return response
+    compressed = _gzip.compress(data, compresslevel=6)
+    if len(compressed) >= len(data):  # compression made it bigger — skip
+        return response
+    response.set_data(compressed)
+    response.headers['Content-Encoding'] = 'gzip'
+    response.headers['Vary'] = 'Accept-Encoding'
+    response.headers['Content-Length'] = len(compressed)
+    return response
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
