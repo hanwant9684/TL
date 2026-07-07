@@ -1,42 +1,47 @@
 # Telegram Viewer
 
-A Flask web app that lets you browse Telegram chats through a web UI. It connects to the Telegram API via Pyrogram, with AI-powered translation (Groq → Gemini → Google Translate fallback chain).
-
-## Stack
-
-- **Backend**: Python / Flask + Flask-SQLAlchemy
-- **Telegram client**: Pyrogram 2.0
-- **Database**: SQLite (default, `TL-Latest/instance/app.db`) or PostgreSQL via `DATABASE_URL`
-- **Translation**: Groq AI → Gemini → Google Translate (unofficial)
+A Flask web app that lets you browse your Telegram account (chats, messages, media) through a browser-based UI. Built with Pyrogram (MTProto) and Flask.
 
 ## How to run
 
-The workflow `Start application` runs `cd TL-Latest && python app.py` on port 5000.
+The workflow **"Start application"** runs `cd TL-Latest && python app.py` on port 5000.
 
-## Required secrets
+## Required secrets (set in Replit Secrets)
 
 | Secret | Description |
-|---|---|
-| `API_ID` | Telegram app API ID from my.telegram.org |
-| `API_HASH` | Telegram app API hash from my.telegram.org |
-| `APP_PASSWORD` | Password to protect the web UI login page |
-| `SESSION_SECRET` | Flask session secret key |
+|--------|-------------|
+| `SESSION_SECRET` | Flask session signing key |
+| `API_ID` | Telegram API ID from [my.telegram.org](https://my.telegram.org) |
+| `API_HASH` | Telegram API hash from [my.telegram.org](https://my.telegram.org) |
+| `APP_PASSWORD` | Password to log in to the web UI |
 
 ## Optional secrets
 
 | Secret | Description |
-|---|---|
-| `GROQ_API_KEY` | Groq AI key for primary AI translation |
-| `GEMINI_API_KEY` | Gemini key for fallback AI translation |
-| `DATABASE_URL` | PostgreSQL URL (defaults to SQLite) |
+|--------|-------------|
+| `GROQ_API_KEY` | Groq API key for AI-powered translation (Llama 3) |
+| `GEMINI_API_KEY` | Gemini API key for AI-powered translation (fallback) |
+| `DATABASE_URL` | Postgres connection string (defaults to SQLite at `instance/app.db`) |
 | `PROXY_TYPE` | Proxy type: `socks5`, `socks4`, or `http` |
-| `PROXY_HOST` / `PROXY_PORT` | Proxy host and port |
-| `PROXY_USER` / `PROXY_PASS` | Proxy credentials (optional) |
+| `PROXY_HOST` | Proxy host |
+| `PROXY_PORT` | Proxy port |
+| `PROXY_USER` | Proxy username (optional) |
+| `PROXY_PASS` | Proxy password (optional) |
 
-## First-time use
+## Features
 
-1. Open the app, enter your `APP_PASSWORD` to log in.
-2. On the main page, paste your Telegram session string to connect an account.
-3. Browse dialogs, read messages, and download media.
+- Browse Telegram chats/dialogs
+- Read messages with inline media previews and thumbnails
+- Download files from Telegram to the server
+- Auto-translation via Groq → Gemini → Google Translate fallback chain
+- Preserved media cache and thumbnail disk cache
+- Rate-limit lockout on login (5 attempts → 5 min lockout)
+
+## Deployment
+
+The `.replit` deployment config uses Gunicorn:
+```
+cd TL-Latest && gunicorn --bind=0.0.0.0:5000 --reuse-port --workers=1 --threads=8 --timeout=120 app:app
+```
 
 ## User preferences
