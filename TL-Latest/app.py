@@ -122,11 +122,20 @@ def translate_with_fallback(text, target_lang, target_name):
 DOWNLOADS_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_downloads")
 PRESERVED_DIR  = os.path.join(os.path.dirname(os.path.abspath(__file__)), "preserved_media")
 THUMBNAILS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "thumbnail_cache")
+EXPORTS_DIR    = os.path.join(os.path.dirname(os.path.abspath(__file__)), "server_exports")
 os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 os.makedirs(PRESERVED_DIR, exist_ok=True)
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
+os.makedirs(EXPORTS_DIR,    exist_ok=True)
 
 download_queue = {}
+export_jobs    = {}   # {job_id: job_dict}
+
+_MEDIA_EXT_MAP = {
+    "photo": ".jpg", "video": ".mp4", "audio": ".mp3",
+    "voice": ".ogg", "animation": ".mp4", "sticker": ".webp",
+    "video_note": ".mp4", "document": "",
+}
 
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
@@ -2370,6 +2379,541 @@ def compress_response(response):
     response.headers['Vary'] = 'Accept-Encoding'
     response.headers['Content-Length'] = len(compressed)
     return response
+
+
+# ── IST timezone helpers (used by export) ────────────────────────────────────
+from datetime import timezone as _tz
+_IST = _tz(timedelta(hours=5, minutes=30))
+
+def _to_ist_str_from_iso(iso_str):
+    """Convert an ISO datetime string to a human-readable IST string."""
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_IST).strftime("%Y-%m-%d %H:%M IST")
+    except Exception:
+        return str(iso_str)[:16]
+
+def _sender_color(key):
+    colors = ["#e17055","#fdcb6e","#00b894","#0984e3","#6c5ce7","#fd79a8","#55efc4","#74b9ff"]
+    try:
+        return colors[hash(str(key)) % len(colors)]
+    except Exception:
+        return colors[0]
+
+def _html_escape(s):
+    return (s or "").replace("&","&amp;").replace("<","&lt;").replace(">","&gt;").replace('"',"&quot;")
+
+def _media_icon(media_type):
+    return {"photo":"🖼️","video":"🎬","audio":"🎵","voice":"🎤","document":"📄",
+            "animation":"🎞️","sticker":"🎭","video_note":"📹"}.get(media_type or "","📎")
+
+def _ist_date_label(iso_str):
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_IST).strftime("%B %-d, %Y")
+    except Exception:
+        return str(iso_str)[:10]
+
+def _ist_time_label(iso_str):
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_IST).strftime("%H:%M")
+    except Exception:
+        return ""
+
+def _ist_date_key(iso_str):
+    if not iso_str:
+        return ""
+    try:
+        dt = datetime.fromisoformat(iso_str)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_tz.utc)
+        return dt.astimezone(_IST).strftime("%Y-%m-%d")
+    except Exception:
+        return str(iso_str)[:10]
+
+def _build_export_html(messages, chat_name, media_map, generated_at):
+    """
+    Build a self-contained Telegram-style HTML export.
+    media_map: dict of {msg_id: "media/filename.ext"} for ZIP exports,
+               empty dict for HTML-only (shows icon + metadata instead).
+    """
+    CSS = """
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0e1621;color:#e8e8e8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.5}
+    .export-header{background:#17212b;padding:16px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10;border-bottom:1px solid #1e2d3d}
+    .export-avatar{width:44px;height:44px;border-radius:50%;background:#5288c1;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700;flex-shrink:0}
+    .export-title{font-size:1rem;font-weight:600}
+    .export-meta{font-size:0.72rem;color:#6c7883;margin-top:2px}
+    .messages{max-width:860px;margin:0 auto;padding:16px 12px}
+    .date-sep{text-align:center;margin:18px 0 10px;position:relative}
+    .date-sep span{background:#17212b;border:1px solid #1e2d3d;border-radius:12px;padding:3px 12px;font-size:0.72rem;color:#6c7883;position:relative;z-index:1}
+    .msg-row{display:flex;margin-bottom:3px;gap:8px}
+    .msg-row.out{flex-direction:row-reverse}
+    .msg-row.in{flex-direction:row}
+    .avatar-col{width:36px;flex-shrink:0;display:flex;align-items:flex-end}
+    .avatar{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:700;flex-shrink:0}
+    .bubble-col{max-width:72%;display:flex;flex-direction:column}
+    .msg-row.out .bubble-col{align-items:flex-end}
+    .bubble{border-radius:12px;padding:8px 12px;position:relative;word-break:break-word}
+    .bubble.out{background:#2b5278;border-bottom-right-radius:4px}
+    .bubble.in{background:#17212b;border-bottom-left-radius:4px}
+    .sender-name{font-size:0.78rem;font-weight:600;margin-bottom:3px}
+    .msg-text{white-space:pre-wrap}
+    .msg-media{margin-top:6px;background:rgba(0,0,0,0.2);border-radius:8px;overflow:hidden}
+    .msg-media img{max-width:100%;max-height:400px;display:block;border-radius:8px}
+    .msg-media video{max-width:100%;max-height:300px;display:block;border-radius:8px}
+    .msg-media audio{width:100%;margin-top:4px}
+    .media-placeholder{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.05)}
+    .media-placeholder.not-downloaded{border:1px dashed rgba(255,255,255,0.12)}
+    .media-not-dl{font-size:0.65rem;color:#e17055;margin-top:2px;font-style:italic}
+    .media-icon{font-size:1.8rem;flex-shrink:0}
+    .media-info{min-width:0}
+    .media-name{font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .media-size{font-size:0.7rem;color:#6c7883;margin-top:2px}
+    .forward-info{font-size:0.72rem;color:#5288c1;border-left:3px solid #5288c1;padding-left:8px;margin-bottom:6px;opacity:0.85}
+    .msg-time{font-size:0.65rem;color:#6c7883;margin-top:4px;text-align:right}
+    .msg-row.in .msg-time{text-align:left}
+    """
+
+    lines = []
+    lines.append("<!DOCTYPE html>")
+    lines.append('<html lang="en"><head><meta charset="UTF-8">')
+    lines.append('<meta name="viewport" content="width=device-width,initial-scale=1">')
+    lines.append(f'<title>{_html_escape(chat_name)} — Telegram Export</title>')
+    lines.append(f'<style>{CSS}</style></head><body>')
+
+    avatar_letter = (chat_name[0] if chat_name else "?").upper()
+    lines.append(f'''<div class="export-header">
+  <div class="export-avatar">{avatar_letter}</div>
+  <div>
+    <div class="export-title">{_html_escape(chat_name)}</div>
+    <div class="export-meta">{len(messages)} messages &nbsp;·&nbsp; Exported {_html_escape(generated_at)}</div>
+  </div>
+</div>''')
+    lines.append('<div class="messages">')
+
+    prev_date_key = None
+    for msg in messages:
+        date_key = _ist_date_key(msg.get("date"))
+        if date_key and date_key != prev_date_key:
+            lines.append(f'<div class="date-sep"><span>{_html_escape(_ist_date_label(msg.get("date")))}</span></div>')
+            prev_date_key = date_key
+
+        is_out = msg.get("is_outgoing")
+        row_cls = "out" if is_out else "in"
+        bubble_cls = "out" if is_out else "in"
+        sender = "You" if is_out else (msg.get("sender_name") or "Unknown")
+        sender_un = msg.get("sender_username")
+        sender_key = msg.get("sender_key") or sender
+        color = _sender_color(sender_key)
+        time_str = _ist_time_label(msg.get("date"))
+        msg_id = msg.get("id")
+
+        lines.append(f'<div class="msg-row {row_cls}">')
+        if not is_out:
+            av_letter = (sender[0] if sender else "?").upper()
+            lines.append(f'<div class="avatar-col"><div class="avatar" style="background:{color}">{av_letter}</div></div>')
+        lines.append(f'<div class="bubble-col"><div class="bubble {bubble_cls}">')
+
+        if not is_out:
+            un_part = f' <span style="font-size:0.7rem;opacity:0.6">@{_html_escape(sender_un)}</span>' if sender_un else ""
+            lines.append(f'<div class="sender-name" style="color:{color}">{_html_escape(sender)}{un_part}</div>')
+
+        fwd = msg.get("forward_from")
+        if fwd:
+            lines.append(f'<div class="forward-info">Forwarded from {_html_escape(str(fwd))}</div>')
+
+        text = (msg.get("text") or "").strip()
+        if text:
+            lines.append(f'<div class="msg-text">{_html_escape(text)}</div>')
+
+        if msg.get("has_media"):
+            mtype = msg.get("media_type") or "document"
+            fname = msg.get("file_name") or ""
+            fsize = msg.get("file_size") or ""
+            icon = _media_icon(mtype)
+            lines.append('<div class="msg-media">')
+            if msg_id in media_map:
+                mpath = media_map[msg_id]
+                if mtype == "photo":
+                    lines.append(f'<img src="{_html_escape(mpath)}" alt="photo" loading="lazy">')
+                elif mtype in ("video", "animation", "video_note"):
+                    lines.append(f'<video src="{_html_escape(mpath)}" controls preload="none"></video>')
+                elif mtype in ("audio", "voice"):
+                    lines.append(f'<audio src="{_html_escape(mpath)}" controls></audio>')
+                else:
+                    display_name = fname or mpath.split("/")[-1]
+                    lines.append(f'<div class="media-placeholder"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div><div class="media-size">{_html_escape(fsize)}</div></div></div>')
+            else:
+                display_name = fname or mtype.upper()
+                size_part = f'<div class="media-size">{_html_escape(fsize)}</div>' if fsize else ''
+                lines.append(f'<div class="media-placeholder not-downloaded"><div class="media-icon">{icon}</div><div class="media-info"><div class="media-name">{_html_escape(display_name)}</div>{size_part}<div class="media-not-dl">file not included in export</div></div></div>')
+            lines.append('</div>')
+
+        if not text and not msg.get("has_media"):
+            lines.append('<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>')
+
+        lines.append(f'<div class="msg-time">{_html_escape(time_str)}</div>')
+        lines.append('</div></div></div>')
+
+    lines.append('</div></body></html>')
+    return "\n".join(lines)
+
+
+@app.route("/api/export/<chat_id>")
+@api_login_required
+def export_chat(chat_id):
+    """Export all messages from a chat. Formats: html, zip (html+media), json, txt."""
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    fmt = request.args.get("format", "html").lower()
+    if fmt not in ("html", "zip", "json", "txt"):
+        fmt = "html"
+    _max_raw = request.args.get("max", "5000")
+    max_msgs = 0 if _max_raw in ("0", "all") else max(1, int(_max_raw))
+    skip_media = request.args.get("skip_media", "0") == "1"
+
+    try:
+        chat_id_int = int(chat_id)
+    except Exception:
+        chat_id_int = chat_id
+
+    _ext_map = {
+        "photo": ".jpg", "video": ".mp4", "audio": ".mp3",
+        "voice": ".ogg", "animation": ".mp4", "sticker": ".webp",
+        "video_note": ".mp4", "document": "",
+    }
+
+    async def _fetch_and_download(client):
+        raw, offset_id = [], 0
+        while True:
+            batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
+            if batch_limit <= 0:
+                break
+            batch = []
+            async for m in client.get_chat_history(
+                chat_id_int, limit=batch_limit, offset_id=offset_id or 0
+            ):
+                batch.append(m)
+            if not batch:
+                break
+            raw.extend(batch)
+            offset_id = batch[-1].id
+            if max_msgs != 0 and len(raw) >= max_msgs:
+                break
+            if len(batch) < batch_limit:
+                break
+        raw.reverse()
+
+        media_data = {}
+        if fmt == "zip" and not skip_media:
+            for raw_msg in raw:
+                if not raw_msg.media or raw_msg.media.value not in DOWNLOADABLE_MEDIA:
+                    continue
+                mtype = raw_msg.media.value
+                media_obj = getattr(raw_msg, mtype, None)
+                fname = getattr(media_obj, "file_name", None)
+                if not fname:
+                    fname = f"file_{raw_msg.id}{_ext_map.get(mtype, '.bin')}"
+                zip_path = f"media/msg_{raw_msg.id}_{fname}"
+                try:
+                    data = await asyncio.wait_for(
+                        client.download_media(raw_msg, in_memory=True), timeout=60
+                    )
+                    if data:
+                        media_data[raw_msg.id] = (zip_path, bytes(data))
+                except Exception as e:
+                    logger.warning(f"Export ZIP: skipped media msg {raw_msg.id}: {e}")
+
+        return raw, media_data
+
+    try:
+        raw_msgs, media_data = run_async(run_with_reconnect(session_str, _fetch_and_download))
+    except Exception as e:
+        logger.error(f"export_chat error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+    messages = [_build_msg_dict(m) for m in raw_msgs]
+
+    sk = session_str[:16]
+    with _chat_info_lock:
+        ci = _chat_info_cache.get((sk, chat_id_int))
+    chat_name = (ci or {}).get("name", f"chat_{chat_id}")
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in chat_name).strip() or f"chat_{chat_id}"
+    generated_at = datetime.now(_IST).strftime("%Y-%m-%d %H:%M IST")
+
+    import json as _json
+    from flask import make_response
+
+    if fmt == "json":
+        content = _json.dumps(messages, ensure_ascii=False, indent=2)
+        resp = make_response(content.encode("utf-8"))
+        resp.headers["Content-Type"] = "application/json; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{safe_name}_export.json"'
+        return resp
+
+    if fmt == "txt":
+        lines = [f"Export of: {chat_name}", f"Messages: {len(messages)}",
+                 f"Generated: {generated_at}", "-" * 60, ""]
+        for msg in messages:
+            date_str = _to_ist_str_from_iso(msg.get("date"))
+            if msg.get("is_outgoing"):
+                sender = "You"
+            else:
+                sender = msg.get("sender_name") or "Unknown"
+                if msg.get("sender_username"):
+                    sender += f" (@{msg['sender_username']})"
+            text = msg.get("text") or ""
+            media_part = ""
+            if msg.get("has_media"):
+                media_part = f"[{(msg.get('media_type') or 'media').upper()}"
+                if msg.get("file_name"):
+                    media_part += f": {msg['file_name']}"
+                if msg.get("file_size"):
+                    media_part += f" ({msg['file_size']})"
+                media_part += "]"
+            fwd = msg.get("forward_from")
+            fwd_part = f"[Fwd: {fwd}] " if fwd else ""
+            body = " ".join(p for p in [fwd_part + text, media_part] if p) or "(no text)"
+            lines.append(f"[{date_str}] {sender}:")
+            lines.append(f"  {body}")
+            lines.append("")
+        content = "\n".join(lines)
+        resp = make_response(content.encode("utf-8"))
+        resp.headers["Content-Type"] = "text/plain; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{safe_name}_export.txt"'
+        return resp
+
+    if fmt == "html":
+        html_content = _build_export_html(messages, chat_name, {}, generated_at)
+        resp = make_response(html_content.encode("utf-8"))
+        resp.headers["Content-Type"] = "text/html; charset=utf-8"
+        resp.headers["Content-Disposition"] = f'attachment; filename="{safe_name}_export.html"'
+        return resp
+
+    import io, zipfile as _zipfile
+    media_map = {mid: info[0] for mid, info in media_data.items()}
+    html_content = _build_export_html(messages, chat_name, media_map, generated_at)
+    buf = io.BytesIO()
+    with _zipfile.ZipFile(buf, "w", _zipfile.ZIP_DEFLATED) as zf:
+        zf.writestr("chat.html", html_content.encode("utf-8"))
+        for mid, (zip_path, file_bytes) in media_data.items():
+            zf.writestr(zip_path, file_bytes)
+    buf.seek(0)
+    resp = make_response(buf.read())
+    resp.headers["Content-Type"] = "application/zip"
+    resp.headers["Content-Disposition"] = f'attachment; filename="{safe_name}_export.zip"'
+    return resp
+
+
+# ── Background export job system ─────────────────────────────────────────────
+
+async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media, chat_name, safe_name):
+    """Long-running async export worker — runs in _loop, not in a request thread."""
+    job = export_jobs[job_id]
+    import zipfile as _zipfile, json as _json, tempfile as _tempfile
+    try:
+        async def _do(client):
+            job['status'] = 'fetching'
+            raw, offset_id = [], 0
+            while True:
+                batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
+                if batch_limit <= 0:
+                    break
+                batch = []
+                async for m in client.get_chat_history(
+                    chat_id_int, limit=batch_limit, offset_id=offset_id or 0
+                ):
+                    batch.append(m)
+                if not batch:
+                    break
+                raw.extend(batch)
+                offset_id = batch[-1].id
+                job['fetched'] = len(raw)
+                job['step'] = f"Fetching messages… {len(raw):,}"
+                if max_msgs != 0 and len(raw) >= max_msgs:
+                    break
+                if len(batch) < batch_limit:
+                    break
+            raw.reverse()
+
+            messages = [_build_msg_dict(m) for m in raw]
+            job['total'] = len(messages)
+
+            tmp_files = {}
+            if fmt == 'zip' and not skip_media:
+                media_msgs = [m for m in raw if m.media and m.media.value in DOWNLOADABLE_MEDIA]
+                job['media_total'] = len(media_msgs)
+                job['status'] = 'downloading'
+                tmp_dir = _tempfile.mkdtemp(dir=EXPORTS_DIR)
+                job['_tmp_dir'] = tmp_dir
+                for i, rm in enumerate(media_msgs):
+                    mtype = rm.media.value
+                    mo = getattr(rm, mtype, None)
+                    fname = getattr(mo, 'file_name', None) or f"file_{rm.id}{_MEDIA_EXT_MAP.get(mtype, '.bin')}"
+                    zip_member = f"media/msg_{rm.id}_{fname}"
+                    tmp_path = os.path.join(tmp_dir, f"msg_{rm.id}_{fname}")
+                    try:
+                        result = await asyncio.wait_for(
+                            client.download_media(rm, file_name=tmp_path), timeout=90
+                        )
+                        if result and os.path.exists(tmp_path):
+                            tmp_files[rm.id] = (tmp_path, zip_member)
+                    except Exception as e:
+                        logger.warning(f"Export job {job_id}: skip media {rm.id}: {e}")
+                    job['media_done'] = i + 1
+                    job['step'] = f"Downloading media… {i+1:,} / {len(media_msgs):,}"
+            return messages, tmp_files
+
+        messages, tmp_files = await run_with_reconnect(session_str, _do)
+
+        job['status'] = 'building'
+        job['step'] = f"Building {fmt.upper()} file…"
+        generated_at = datetime.now(_IST).strftime("%Y-%m-%d %H:%M IST")
+
+        if fmt == 'html':
+            out_path = os.path.join(EXPORTS_DIR, f"{job_id}.html")
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write(_build_export_html(messages, chat_name, {}, generated_at))
+            job.update(filename=f"{safe_name}_export.html", mimetype="text/html; charset=utf-8")
+
+        elif fmt == 'zip':
+            media_map = {mid: info[1] for mid, info in tmp_files.items()}
+            html_content = _build_export_html(messages, chat_name, media_map, generated_at)
+            out_path = os.path.join(EXPORTS_DIR, f"{job_id}.zip")
+            with _zipfile.ZipFile(out_path, 'w', _zipfile.ZIP_DEFLATED) as zf:
+                zf.writestr("chat.html", html_content.encode('utf-8'))
+                for mid, (tmp_path, zip_member) in tmp_files.items():
+                    if os.path.exists(tmp_path):
+                        zf.write(tmp_path, zip_member)
+                        os.remove(tmp_path)
+            tmp_dir = job.get('_tmp_dir')
+            if tmp_dir and os.path.isdir(tmp_dir):
+                try: os.rmdir(tmp_dir)
+                except Exception: pass
+            job.update(filename=f"{safe_name}_export.zip", mimetype="application/zip")
+
+        elif fmt == 'json':
+            out_path = os.path.join(EXPORTS_DIR, f"{job_id}.json")
+            with open(out_path, 'w', encoding='utf-8') as f:
+                _json.dump(messages, f, ensure_ascii=False, indent=2)
+            job.update(filename=f"{safe_name}_export.json", mimetype="application/json; charset=utf-8")
+
+        else:  # txt
+            lines = [f"Export of: {chat_name}", f"Messages: {len(messages)}",
+                     f"Generated: {generated_at}", "-" * 60, ""]
+            for msg in messages:
+                sender = "You" if msg.get("is_outgoing") else (
+                    (msg.get("sender_name") or "Unknown") +
+                    (f" (@{msg['sender_username']})" if msg.get("sender_username") else "")
+                )
+                text = msg.get("text") or ""
+                media_part = ""
+                if msg.get("has_media"):
+                    media_part = f"[{(msg.get('media_type') or 'media').upper()}"
+                    if msg.get("file_name"): media_part += f": {msg['file_name']}"
+                    if msg.get("file_size"): media_part += f" ({msg['file_size']})"
+                    media_part += "]"
+                fwd = msg.get("forward_from")
+                body = " ".join(p for p in [(f"[Fwd:{fwd}] " if fwd else "") + text, media_part] if p) or "(no text)"
+                lines += [f"[{_to_ist_str_from_iso(msg.get('date'))}] {sender}:", f"  {body}", ""]
+            out_path = os.path.join(EXPORTS_DIR, f"{job_id}.txt")
+            with open(out_path, 'w', encoding='utf-8') as f:
+                f.write("\n".join(lines))
+            job.update(filename=f"{safe_name}_export.txt", mimetype="text/plain; charset=utf-8")
+
+        job['path'] = out_path
+        job['status'] = 'done'
+        job['step'] = f"Done — {len(messages):,} messages"
+
+    except Exception as e:
+        logger.error(f"Export job {job_id} failed: {e}", exc_info=True)
+        job['status'] = 'error'
+        job['step'] = str(e)
+        job['error'] = str(e)
+        tmp_dir = job.get('_tmp_dir')
+        if tmp_dir and os.path.isdir(tmp_dir):
+            try: __import__('shutil').rmtree(tmp_dir, ignore_errors=True)
+            except Exception: pass
+
+
+@app.route("/api/export-job/<chat_id>", methods=["POST"])
+@api_login_required
+def start_export_job(chat_id):
+    """Start a background export job, return job_id immediately."""
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session"}), 401
+    data = request.get_json(silent=True) or {}
+    fmt = data.get("format", "html").lower()
+    if fmt not in ("html", "zip", "json", "txt"):
+        fmt = "html"
+    max_raw = str(data.get("max", 5000))
+    max_msgs = 0 if max_raw in ("0", "all") else max(1, int(max_raw))
+    skip_media = bool(data.get("skip_media", False))
+    try:
+        chat_id_int = int(chat_id)
+    except Exception:
+        chat_id_int = chat_id
+    sk = session_str[:16]
+    with _chat_info_lock:
+        ci = _chat_info_cache.get((sk, chat_id_int))
+    chat_name = (ci or {}).get("name", f"chat_{chat_id}")
+    safe_name = "".join(c if c.isalnum() or c in "-_ " else "_" for c in chat_name).strip() or f"chat_{chat_id}"
+    job_id = str(uuid.uuid4())
+    export_jobs[job_id] = {
+        "status": "pending", "step": "Starting…",
+        "fetched": 0, "total": 0, "media_done": 0, "media_total": 0,
+        "fmt": fmt, "chat_name": chat_name,
+        "path": None, "filename": None, "mimetype": None, "error": None,
+        "created": time.time(),
+    }
+    asyncio.run_coroutine_threadsafe(
+        _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media, chat_name, safe_name),
+        _loop
+    )
+    return jsonify({"job_id": job_id})
+
+
+@app.route("/api/export-job-status/<job_id>")
+@api_login_required
+def export_job_status(job_id):
+    job = export_jobs.get(job_id)
+    if not job:
+        return jsonify({"error": "Not found"}), 404
+    return jsonify({
+        "status": job["status"], "step": job["step"],
+        "fetched": job["fetched"], "total": job["total"],
+        "media_done": job["media_done"], "media_total": job["media_total"],
+        "fmt": job["fmt"], "filename": job.get("filename"), "error": job.get("error"),
+    })
+
+
+@app.route("/api/export-job-download/<job_id>")
+@api_login_required
+def export_job_download(job_id):
+    job = export_jobs.get(job_id)
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
+    path = job.get("path")
+    if not path or not os.path.exists(path):
+        return jsonify({"error": "File missing"}), 404
+    return send_file(path, as_attachment=True, download_name=job["filename"], mimetype=job["mimetype"])
 
 
 if __name__ == "__main__":

@@ -246,6 +246,16 @@
         .disk-clear-btn:disabled{opacity:0.5;cursor:default;}
         #disk-panel-toggle.active{color:var(--accent);}
 
+        /* Export progress panel */
+        #export-panel{display:none;position:fixed;bottom:20px;right:20px;width:300px;background:#17212b;border:1px solid #2a3a4a;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,0.6);z-index:500;overflow:hidden;}
+        .export-panel-head{background:#1e2d3d;padding:11px 14px;display:flex;align-items:center;justify-content:space-between;}
+        .export-panel-body{padding:14px;}
+        .export-panel-step{font-size:0.82rem;color:#e8e8e8;margin-bottom:10px;min-height:1.2em;}
+        .export-progress-track{background:#0e1621;border-radius:6px;height:6px;overflow:hidden;margin-bottom:10px;}
+        .export-progress-fill{background:#5288c1;height:100%;width:0%;transition:width 0.4s;}
+        .export-panel-detail{font-size:0.7rem;color:#6c7883;margin-bottom:12px;min-height:1em;}
+        .export-panel-actions{display:flex;gap:8px;}
+
         /* Sessions modal */
         .modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:1000;align-items:center;justify-content:center;}
         .modal-overlay.open{display:flex;}
@@ -417,6 +427,29 @@
                 <div class="toolbar-group">
                     <input type="text" id="search-input" class="tb-input" placeholder="Search messages..." style="width:140px;">
                     <button class="tb-btn" onclick="doSearch()">Search</button>
+                </div>
+                <div class="sep"></div>
+                <div class="toolbar-group" style="position:relative;">
+                    <button class="tb-btn green" id="export-btn" onclick="toggleExportMenu(event)" title="Export all messages from this chat">📤 Export</button>
+                    <div id="export-menu" onclick="event.stopPropagation()" style="display:none;position:absolute;top:calc(100% + 4px);left:0;background:var(--bg-header);border:1px solid var(--border);border-radius:8px;padding:8px;z-index:200;min-width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.4);">
+                        <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">Max messages</div>
+                        <select id="export-max" style="width:100%;background:#0e1621;border:1px solid var(--border);color:#fff;border-radius:5px;padding:4px 6px;font-size:0.78rem;margin-bottom:8px;">
+                            <option value="1000">1 000</option>
+                            <option value="5000" selected>5 000</option>
+                            <option value="10000">10 000</option>
+                            <option value="50000">50 000</option>
+                            <option value="100000">1 lakh (100 000)</option>
+                            <option value="0">All messages ⚠</option>
+                        </select>
+                        <label style="display:flex;align-items:center;gap:7px;font-size:0.75rem;color:var(--text-muted);margin-bottom:8px;cursor:pointer;padding:0 2px;">
+                            <input type="checkbox" id="export-skip-media"> Skip media files (ZIP only)
+                        </label>
+                        <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">Format</div>
+                        <button class="tb-btn" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('html')" title="Telegram-style chat bubbles, opens in any browser">💬 HTML — Telegram view</button>
+                        <button class="tb-btn green" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('zip')" title="HTML + all photos, videos, and files downloaded">📦 ZIP — with all media</button>
+                        <button class="tb-btn" style="width:100%;margin-bottom:4px;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('txt')" title="Plain text, one message per block">📄 TXT — plain text</button>
+                        <button class="tb-btn" style="width:100%;justify-content:flex-start;gap:8px;display:flex;" onclick="startExportJob('json')" title="Raw structured data for developers">{ } JSON — raw data</button>
+                    </div>
                 </div>
                 <div class="sep"></div>
                 <button id="protect-btn" class="tb-btn" onclick="toggleProtection()" title="Protect this chat — auto-save all incoming media" style="display:none;">🛡 Protect</button>
@@ -1377,6 +1410,97 @@ function onAutoTranslate() {
     if (autoTranslate) translateAll();
 }
 
+function toggleExportMenu(e) {
+    e.stopPropagation();
+    const menu = document.getElementById('export-menu');
+    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+}
+document.addEventListener('click', () => {
+    const m = document.getElementById('export-menu');
+    if (m) m.style.display = 'none';
+});
+
+// ── Background export job ─────────────────────────────────────────────────────
+let _exportJobId = null;
+let _exportPollTimer = null;
+
+async function startExportJob(fmt) {
+    if (!currentChatId) return;
+    const max = parseInt(document.getElementById('export-max').value) || 0;
+    const skipMedia = document.getElementById('export-skip-media').checked;
+    document.getElementById('export-menu').style.display = 'none';
+
+    _showExportPanel('Starting…', 0, '');
+    document.getElementById('export-cancel-btn').style.display = '';
+    document.getElementById('export-download-btn').style.display = 'none';
+
+    try {
+        const r = await fetch(`/api/export-job/${currentChatId}`, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({format: fmt, max, skip_media: skipMedia})
+        });
+        if (r.status === 401) { handleAuthExpired(); return; }
+        if (!r.ok) { _showExportPanel('Failed to start export', 0, await r.text()); return; }
+        const d = await r.json();
+        _exportJobId = d.job_id;
+        if (_exportPollTimer) clearInterval(_exportPollTimer);
+        _exportPollTimer = setInterval(_pollExportJob, 2000);
+    } catch(e) {
+        _showExportPanel(`Error: ${e.message}`, 0, '');
+    }
+}
+
+async function _pollExportJob() {
+    if (!_exportJobId) return;
+    try {
+        const r = await fetch(`/api/export-job-status/${_exportJobId}`);
+        if (!r.ok) return;
+        const d = await r.json();
+
+        let pct = 0, detail = '';
+        if (d.status === 'fetching') {
+            pct = Math.min(38, 5 + (d.fetched / Math.max(d.fetched + 500, 1)) * 35);
+            detail = `${(d.fetched||0).toLocaleString()} messages fetched`;
+        } else if (d.status === 'downloading') {
+            pct = d.media_total > 0 ? 40 + (d.media_done / d.media_total) * 50 : 45;
+            detail = `${(d.media_done||0).toLocaleString()} / ${(d.media_total||0).toLocaleString()} files downloaded`;
+        } else if (d.status === 'building') {
+            pct = 92;
+            detail = `${(d.total||0).toLocaleString()} messages`;
+        } else if (d.status === 'done') {
+            pct = 100;
+            detail = `${(d.total||0).toLocaleString()} messages exported`;
+            clearInterval(_exportPollTimer); _exportPollTimer = null;
+            document.getElementById('export-cancel-btn').style.display = 'none';
+            const dlBtn = document.getElementById('export-download-btn');
+            dlBtn.onclick = () => { window.location.href = `/api/export-job-download/${_exportJobId}`; };
+            dlBtn.style.display = '';
+        } else if (d.status === 'error') {
+            pct = 0; detail = d.error || 'Unknown error';
+            clearInterval(_exportPollTimer); _exportPollTimer = null;
+        }
+        _showExportPanel(d.step || d.status, pct, detail);
+    } catch(e) { console.error('Export poll:', e); }
+}
+
+function _showExportPanel(step, pct, detail) {
+    document.getElementById('export-panel').style.display = 'block';
+    document.getElementById('export-panel-step').textContent = step;
+    document.getElementById('export-panel-bar').style.width = pct + '%';
+    document.getElementById('export-panel-detail').textContent = detail;
+}
+
+function closeExportPanel() {
+    document.getElementById('export-panel').style.display = 'none';
+    if (_exportPollTimer) { clearInterval(_exportPollTimer); _exportPollTimer = null; }
+}
+
+function cancelExportJob() {
+    closeExportPanel();
+    _exportJobId = null;
+}
+
 async function doSearch() {
     const q = document.getElementById('search-input').value.trim();
     if (!q || !currentChatId) return;
@@ -2000,5 +2124,22 @@ async function clearThumbnailCache() {
     }
 }
 </script>
+
+<!-- Export progress panel -->
+<div id="export-panel">
+    <div class="export-panel-head">
+        <span style="font-size:0.85rem;font-weight:600;">📤 Export</span>
+        <button onclick="closeExportPanel()" style="background:none;border:none;color:#6c7883;cursor:pointer;font-size:1.1rem;line-height:1;padding:0 2px;">✕</button>
+    </div>
+    <div class="export-panel-body">
+        <div id="export-panel-step" class="export-panel-step">Starting…</div>
+        <div class="export-progress-track"><div id="export-panel-bar" class="export-progress-fill"></div></div>
+        <div id="export-panel-detail" class="export-panel-detail"></div>
+        <div class="export-panel-actions">
+            <button id="export-cancel-btn" class="tb-btn danger" style="flex:1;" onclick="cancelExportJob()">Cancel</button>
+            <button id="export-download-btn" class="tb-btn green" style="flex:1;display:none;" onclick="">⬇ Download</button>
+        </div>
+    </div>
+</div>
 </body>
 </html>
