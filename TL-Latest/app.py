@@ -124,14 +124,6 @@ os.makedirs(DOWNLOADS_DIR, exist_ok=True)
 os.makedirs(PRESERVED_DIR, exist_ok=True)
 os.makedirs(THUMBNAILS_DIR, exist_ok=True)
 
-# How long to keep downloaded files on disk before auto-cleanup removes them.
-# Override via env var — e.g. DOWNLOAD_MAX_AGE_HOURS=48 keeps files for 2 days.
-DOWNLOAD_MAX_AGE_HOURS   = int(os.environ.get("DOWNLOAD_MAX_AGE_HOURS", "24"))
-# Thumbnail disk cache is cheaper to rebuild, so keep it longer.
-THUMB_CACHE_MAX_AGE_DAYS = int(os.environ.get("THUMB_CACHE_MAX_AGE_DAYS", "7"))
-# How often the background cleanup loop fires (seconds). Default: 1 hour.
-CLEANUP_INTERVAL_SECS    = int(os.environ.get("CLEANUP_INTERVAL_SECS", "3600"))
-
 download_queue = {}
 
 LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
@@ -556,94 +548,6 @@ def _startup_restore():
         logger.info(f"[startup] Restored {len(download_queue)} download record(s) from DB.")
 
 threading.Thread(target=_startup_restore, daemon=True).start()
-
-# ── Background disk cleanup ───────────────────────────────────────────────────
-# Runs immediately on startup (sweeps zip_tmp_ files left by crashed requests)
-# then fires every CLEANUP_INTERVAL_SECS to remove stale downloads and thumbs.
-
-def _run_cleanup():
-    """Delete old files from DOWNLOADS_DIR and THUMBNAILS_DIR + their DB rows."""
-    now = time.time()
-    download_max_age = DOWNLOAD_MAX_AGE_HOURS * 3600
-    thumb_max_age    = THUMB_CACHE_MAX_AGE_DAYS * 86400
-    deleted_disk = deleted_db = deleted_thumbs = 0
-    old_ids = set()
-
-    # ── 1. Downloads dir ──────────────────────────────────────────────────────
-    try:
-        for fname in os.listdir(DOWNLOADS_DIR):
-            fpath = os.path.join(DOWNLOADS_DIR, fname)
-            # Always sweep leftover zip_tmp_ files regardless of age
-            if fname.startswith("zip_tmp_"):
-                try:
-                    os.remove(fpath)
-                    deleted_disk += 1
-                    logger.info(f"[cleanup] Removed stale zip temp: {fname}")
-                except Exception as e:
-                    logger.warning(f"[cleanup] Could not remove zip_tmp {fname}: {e}")
-                continue
-            try:
-                if now - os.path.getmtime(fpath) > download_max_age:
-                    os.remove(fpath)
-                    deleted_disk += 1
-                    # download_id is the part before the first underscore
-                    did = fname.split("_")[0]
-                    if did:
-                        old_ids.add(did)
-            except Exception as e:
-                logger.warning(f"[cleanup] Could not process download file {fname}: {e}")
-    except Exception as e:
-        logger.warning(f"[cleanup] Error scanning downloads dir: {e}")
-
-    # ── 2. Remove DB rows whose disk files were just deleted ──────────────────
-    if old_ids:
-        try:
-            with app.app_context():
-                deleted_db = ServerDownload.query.filter(
-                    ServerDownload.download_id.in_(old_ids)
-                ).delete(synchronize_session=False)
-                db.session.commit()
-        except Exception as e:
-            try:
-                with app.app_context():
-                    db.session.rollback()
-            except Exception:
-                pass
-            logger.warning(f"[cleanup] DB row cleanup failed: {e}")
-
-    # ── 3. Thumbnail disk cache ───────────────────────────────────────────────
-    try:
-        for fname in os.listdir(THUMBNAILS_DIR):
-            fpath = os.path.join(THUMBNAILS_DIR, fname)
-            try:
-                if now - os.path.getmtime(fpath) > thumb_max_age:
-                    os.remove(fpath)
-                    deleted_thumbs += 1
-            except Exception as e:
-                logger.warning(f"[cleanup] Could not remove thumb {fname}: {e}")
-    except Exception as e:
-        logger.warning(f"[cleanup] Error scanning thumbnails dir: {e}")
-
-    if deleted_disk or deleted_db or deleted_thumbs:
-        logger.info(
-            f"[cleanup] Purged {deleted_disk} download file(s), "
-            f"{deleted_db} DB record(s), {deleted_thumbs} thumbnail(s)"
-        )
-
-def _cleanup_loop():
-    # Immediate startup sweep (catches zip_tmp_ orphans from crashed requests)
-    try:
-        _run_cleanup()
-    except Exception as e:
-        logger.warning(f"[cleanup] Startup sweep error: {e}")
-    while True:
-        time.sleep(CLEANUP_INTERVAL_SECS)
-        try:
-            _run_cleanup()
-        except Exception as e:
-            logger.warning(f"[cleanup] Periodic cleanup error: {e}")
-
-threading.Thread(target=_cleanup_loop, daemon=True, name="disk-cleanup").start()
 
 # ── General-purpose TTL cache (dialogs, messages, account info) ───────────────
 
@@ -2203,12 +2107,30 @@ def disk_stats():
         "downloads":       _dir_stats(DOWNLOADS_DIR),
         "preserved_media": _dir_stats(PRESERVED_DIR),
         "thumbnail_cache": _dir_stats(THUMBNAILS_DIR),
-        "settings": {
-            "download_max_age_hours":   DOWNLOAD_MAX_AGE_HOURS,
-            "thumb_cache_max_age_days": THUMB_CACHE_MAX_AGE_DAYS,
-            "cleanup_interval_secs":    CLEANUP_INTERVAL_SECS,
-        },
     })
+
+@app.route("/api/disk-stats/thumbnails/clear", methods=["DELETE"])
+@login_required
+def clear_thumbnail_cache():
+    """Manually wipe the entire thumbnail disk cache.
+    Thumbnails will be re-fetched from Telegram on next view."""
+    deleted = 0
+    errors = 0
+    try:
+        for fname in os.listdir(THUMBNAILS_DIR):
+            try:
+                os.remove(os.path.join(THUMBNAILS_DIR, fname))
+                deleted += 1
+            except Exception as e:
+                logger.warning(f"clear_thumbnail_cache: could not remove {fname}: {e}")
+                errors += 1
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    # Also wipe the in-memory thumb cache so stale entries don't linger
+    with _thumb_cache_lock:
+        _thumb_cache.clear()
+    logger.info(f"clear_thumbnail_cache: removed {deleted} file(s) ({errors} error(s))")
+    return jsonify({"success": True, "deleted": deleted, "errors": errors})
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000)
