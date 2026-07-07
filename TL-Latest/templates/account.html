@@ -432,7 +432,11 @@
                 <div class="toolbar-group" style="position:relative;">
                     <button class="tb-btn green" id="export-btn" onclick="toggleExportMenu(event)" title="Export all messages from this chat">📤 Export</button>
                     <div id="export-menu" onclick="event.stopPropagation()" style="display:none;position:absolute;top:calc(100% + 4px);left:0;background:var(--bg-header);border:1px solid var(--border);border-radius:8px;padding:8px;z-index:200;min-width:200px;box-shadow:0 4px 20px rgba(0,0,0,0.4);">
-                        <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">Max messages</div>
+                        <!-- Date range info -->
+                        <div id="export-date-range" style="font-size:0.68rem;color:#6c7883;background:#0e1621;border-radius:5px;padding:5px 8px;margin-bottom:8px;min-height:1.6em;line-height:1.6;">Loading chat dates…</div>
+                        <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">From date <span style="font-weight:400;opacity:0.6">(leave empty = all)</span></div>
+                        <input type="date" id="export-from-date" style="width:100%;background:#0e1621;border:1px solid var(--border);color:#fff;border-radius:5px;padding:4px 6px;font-size:0.78rem;margin-bottom:8px;color-scheme:dark;">
+                        <div style="font-size:0.7rem;color:var(--text-muted);padding:2px 4px 5px;font-weight:600;">Max messages <span style="font-weight:400;opacity:0.6">(after date filter)</span></div>
                         <select id="export-max" style="width:100%;background:#0e1621;border:1px solid var(--border);color:#fff;border-radius:5px;padding:4px 6px;font-size:0.78rem;margin-bottom:8px;">
                             <option value="1000">1 000</option>
                             <option value="5000" selected>5 000</option>
@@ -1410,15 +1414,45 @@ function onAutoTranslate() {
     if (autoTranslate) translateAll();
 }
 
+let _exportDateRangeChatId = null;
+
 function toggleExportMenu(e) {
     e.stopPropagation();
     const menu = document.getElementById('export-menu');
-    menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+    const isOpening = menu.style.display === 'none';
+    menu.style.display = isOpening ? 'block' : 'none';
+    if (isOpening && currentChatId && currentChatId !== _exportDateRangeChatId) {
+        _fetchExportDateRange(currentChatId);
+    }
 }
 document.addEventListener('click', () => {
     const m = document.getElementById('export-menu');
     if (m) m.style.display = 'none';
 });
+
+async function _fetchExportDateRange(chatId) {
+    const el = document.getElementById('export-date-range');
+    if (!el) return;
+    el.textContent = 'Loading chat dates…';
+    _exportDateRangeChatId = chatId;
+    try {
+        const r = await fetch(`/api/chat-date-range/${chatId}`);
+        if (!r.ok) { el.textContent = 'Could not load date range'; return; }
+        const d = await r.json();
+        if (d.error) { el.textContent = 'Could not load date range'; return; }
+        const fmt = iso => iso ? new Date(iso).toLocaleDateString('en-IN', {day:'numeric',month:'short',year:'numeric'}) : '?';
+        const oldestLabel = d.oldest ? fmt(d.oldest) : 'unknown';
+        const newestLabel = d.newest ? fmt(d.newest) : 'today';
+        el.innerHTML = `📅 <b>${oldestLabel}</b> → <b>${newestLabel}</b>`;
+        // Pre-fill "from date" with oldest date so user can see it and adjust
+        const fromInput = document.getElementById('export-from-date');
+        if (fromInput && !fromInput.value && d.oldest) {
+            fromInput.value = d.oldest.slice(0, 10);
+        }
+    } catch(e) {
+        el.textContent = 'Could not load date range';
+    }
+}
 
 // ── Background export job ─────────────────────────────────────────────────────
 let _exportJobId = null;
@@ -1428,9 +1462,11 @@ async function startExportJob(fmt) {
     if (!currentChatId) return;
     const max = parseInt(document.getElementById('export-max').value) || 0;
     const skipMedia = document.getElementById('export-skip-media').checked;
+    const fromDate = (document.getElementById('export-from-date').value || '').trim();
     document.getElementById('export-menu').style.display = 'none';
 
-    _showExportPanel('Starting…', 0, '');
+    const startLabel = fromDate ? `From ${fromDate}` : 'Starting';
+    _showExportPanel(`${startLabel}…`, 0, '');
     document.getElementById('export-cancel-btn').style.display = '';
     document.getElementById('export-download-btn').style.display = 'none';
 
@@ -1438,7 +1474,7 @@ async function startExportJob(fmt) {
         const r = await fetch(`/api/export-job/${currentChatId}`, {
             method: 'POST',
             headers: {'Content-Type': 'application/json'},
-            body: JSON.stringify({format: fmt, max, skip_media: skipMedia})
+            body: JSON.stringify({format: fmt, max, skip_media: skipMedia, from_date: fromDate})
         });
         if (r.status === 401) { handleAuthExpired(); return; }
         if (!r.ok) { _showExportPanel('Failed to start export', 0, await r.text()); return; }

@@ -1,0 +1,2358 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Chat — Telegram Export</title>
+<style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{background:#0e1621;color:#e8e8e8;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;font-size:14px;line-height:1.5}
+    .export-header{background:#17212b;padding:16px 20px;display:flex;align-items:center;gap:14px;position:sticky;top:0;z-index:10;border-bottom:1px solid #1e2d3d}
+    .export-avatar{width:44px;height:44px;border-radius:50%;background:#5288c1;display:flex;align-items:center;justify-content:center;font-size:1.2rem;font-weight:700;flex-shrink:0}
+    .export-title{font-size:1rem;font-weight:600}
+    .export-meta{font-size:0.72rem;color:#6c7883;margin-top:2px}
+    .messages{max-width:860px;margin:0 auto;padding:16px 12px}
+    .date-sep{text-align:center;margin:18px 0 10px;position:relative}
+    .date-sep span{background:#17212b;border:1px solid #1e2d3d;border-radius:12px;padding:3px 12px;font-size:0.72rem;color:#6c7883;position:relative;z-index:1}
+    .msg-row{display:flex;margin-bottom:3px;gap:8px}
+    .msg-row.out{flex-direction:row-reverse}
+    .msg-row.in{flex-direction:row}
+    .avatar-col{width:36px;flex-shrink:0;display:flex;align-items:flex-end}
+    .avatar{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:0.85rem;font-weight:700;flex-shrink:0}
+    .bubble-col{max-width:72%;display:flex;flex-direction:column}
+    .msg-row.out .bubble-col{align-items:flex-end}
+    .bubble{border-radius:12px;padding:8px 12px;position:relative;word-break:break-word}
+    .bubble.out{background:#2b5278;border-bottom-right-radius:4px}
+    .bubble.in{background:#17212b;border-bottom-left-radius:4px}
+    .sender-name{font-size:0.78rem;font-weight:600;margin-bottom:3px}
+    .msg-text{white-space:pre-wrap}
+    .msg-media{margin-top:6px;background:rgba(0,0,0,0.2);border-radius:8px;overflow:hidden}
+    .msg-media img{max-width:100%;max-height:400px;display:block;border-radius:8px}
+    .msg-media video{max-width:100%;max-height:300px;display:block;border-radius:8px}
+    .msg-media audio{width:100%;margin-top:4px}
+    .media-placeholder{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;background:rgba(255,255,255,0.05)}
+    .media-placeholder.not-downloaded{border:1px dashed rgba(255,255,255,0.12)}
+    .media-not-dl{font-size:0.65rem;color:#e17055;margin-top:2px;font-style:italic}
+    .media-icon{font-size:1.8rem;flex-shrink:0}
+    .media-info{min-width:0}
+    .media-name{font-size:0.82rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    .media-size{font-size:0.7rem;color:#6c7883;margin-top:2px}
+    .forward-info{font-size:0.72rem;color:#5288c1;border-left:3px solid #5288c1;padding-left:8px;margin-bottom:6px;opacity:0.85}
+    .msg-time{font-size:0.65rem;color:#6c7883;margin-top:4px;text-align:right}
+    .msg-row.in .msg-time{text-align:left}
+    </style></head><body>
+<div class="export-header">
+  <div class="export-avatar">C</div>
+  <div>
+    <div class="export-title">Chat</div>
+    <div class="export-meta">306 messages &nbsp;·&nbsp; Exported 2026-07-07 16:25 IST</div>
+  </div>
+</div>
+<div class="messages">
+<div class="date-sep"><span>July 4, 2026</span></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">P</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Pw🏴</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">19:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">16.54 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">19:25</div>
+</div></div></div>
+<div class="date-sep"><span>July 5, 2026</span></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">38.29 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">00:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">36.49 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">00:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">10.25 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">14.05 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">27.72 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">33.46 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">7.82 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">11.0 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">17.86 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">2.05 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">4.04 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">5.14 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">11.83 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">47.57 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">24.6 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">51.06 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:12</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">18.3 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">9.67 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🖼️</div><div class="media-info"><div class="media-name">PHOTO</div><div class="media-size">351.95 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">12.63 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">25.94 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">11.22 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🖼️</div><div class="media-info"><div class="media-name">PHOTO</div><div class="media-size">113.03 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">8.87 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1014.39 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">601.45 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.29 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1017.47 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.07 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.12 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">863.43 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">654.36 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">668.73 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">253.34 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🖼️</div><div class="media-info"><div class="media-name">PHOTO</div><div class="media-size">362.24 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">3.91 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:22</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">2.48 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">6.41 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">6.79 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">23.91 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">25.87 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">17.37 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">2.07 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">13.85 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.25 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">4.22 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">13.72 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">15.98 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">9.94 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🖼️</div><div class="media-info"><div class="media-name">PHOTO</div><div class="media-size">294.81 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">20.14 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">13.92 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">19.34 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">13.92 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.29 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">25.94 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">24.89 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">21.07 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">31.54 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">13.36 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">18.45 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">9.55 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:50</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">4.25 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">2.59 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">01:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.65 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">02:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">757.7 KB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">02:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.25 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">02:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">02:27</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">S</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Stan Smith <span style="font-size:0.7rem;opacity:0.6">@Stansmith69</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">02:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">S</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Superpooperscopper Pooter <span style="font-size:0.7rem;opacity:0.6">@Superpooperscooper</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">02:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">.</div>
+<div class="msg-time">02:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">?</div>
+<div class="msg-time">02:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">C</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Chris G</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">04:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Alex <span style="font-size:0.7rem;opacity:0.6">@GardenHeat</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">04:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Ty <span style="font-size:0.7rem;opacity:0.6">@tron537</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">04:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Tax Tal <span style="font-size:0.7rem;opacity:0.6">@Tax21lol</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:09</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Alex</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:10</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">U</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">User 8717300479</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:16</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">😮</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">😮‍💨😮‍💨</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:24</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:29</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:29</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">U</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">User 8717300479</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:31</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">P</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Plumber John <span style="font-size:0.7rem;opacity:0.6">@moule69</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Baylee Saelee <span style="font-size:0.7rem;opacity:0.6">@The_Saelee</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">⁉</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">⁉️ <span style="font-size:0.7rem;opacity:0.6">@r719a</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">D</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">DAN <span style="font-size:0.7rem;opacity:0.6">@LOL74923</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">Y</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Yk</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Al El <span style="font-size:0.7rem;opacity:0.6">@newgoalie</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:23</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Justaway</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:27</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:36</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Jed</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">G</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">glo</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">Big H <span style="font-size:0.7rem;opacity:0.6">@unix1012</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">G</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Gwright <span style="font-size:0.7rem;opacity:0.6">@Gwright1127</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">07:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">R</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Rod</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nah Mane</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fdcb6e">K</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fdcb6e">ky</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">E</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Ethan Romero <span style="font-size:0.7rem;opacity:0.6">@ethanromer</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">D</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Daauo <span style="font-size:0.7rem;opacity:0.6">@Daaou33</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">C</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Carlos . <span style="font-size:0.7rem;opacity:0.6">@Asm0d3us201</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">09:30</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">C</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Carlos . <span style="font-size:0.7rem;opacity:0.6">@Asm0d3us201</span></div>
+<div class="msg-text">Mmm gorgeous</div>
+<div class="msg-time">09:30</div>
+</div></div></div>
+<div class="date-sep"><span>July 6, 2026</span></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">will she post more?</div>
+<div class="msg-time">12:05</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I will</div>
+<div class="msg-time">12:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">What should I post then</div>
+<div class="msg-time">12:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Riding videos are hot</div>
+<div class="msg-time">12:08</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">touching yourself while reading the quran or more or lg</div>
+<div class="msg-time">12:10</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">1.47 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">14:40</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">12.66 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:24</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">2.55 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:24</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">12.66 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:31</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">10.6 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:31</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">22.42 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">H</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Holdien McNeil</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:33</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">H</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Hippie Dad <span style="font-size:0.7rem;opacity:0.6">@hippiedad23</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:34</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">M</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Mark</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:34</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">M</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">M R</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:34</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">L</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">L M <span style="font-size:0.7rem;opacity:0.6">@diablopapicono</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">45.0 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">15:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">C</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Chr Barra <span style="font-size:0.7rem;opacity:0.6">@Spicy989</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">15:36</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nope</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">16:22</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Bob Jones</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">16:30</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">Bonk <span style="font-size:0.7rem;opacity:0.6">@sxdboiii3</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">16:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">17:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">27.28 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">17:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">3.37 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">17:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">38.1 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">17:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">17:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">18:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">10.73 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">18:14</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">she need a real sex toy like a dog dildo</div>
+<div class="msg-time">18:25</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I try one but it's hurts me</div>
+<div class="msg-time">18:30</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I actually never been fully penetrated if I do ride would u mind the blood?</div>
+<div class="msg-time">18:31</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Wouldn’t mind it at all</div>
+<div class="msg-time">18:31</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Not at all. It’d be hot watching you bleed for cock</div>
+<div class="msg-time">18:32</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">bunny whats your thoughts on puppy girl?</div>
+<div class="msg-time">18:35</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I like it</div>
+<div class="msg-time">18:36</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">i like to see bunny bark</div>
+<div class="msg-time">18:38</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">T W <span style="font-size:0.7rem;opacity:0.6">@wortheverypenni</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">18:40</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">bunnt what's your thoughts on knotting?</div>
+<div class="msg-time">18:42</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I don't mind it</div>
+<div class="msg-time">18:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Would you ever try it?</div>
+<div class="msg-time">18:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I am down for whatever lol actually I love trying new things</div>
+<div class="msg-time">18:44</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">Jeven Helke</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">18:44</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Really you would let a dog cum inside you?</div>
+<div class="msg-time">18:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Wait is that is?</div>
+<div class="msg-time">18:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ehmm I thought it was something else actually but no</div>
+<div class="msg-time">18:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Animals don't really turn me on sexually but humans do lmao</div>
+<div class="msg-time">18:46</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">would you try a dog dildo?</div>
+<div class="msg-time">18:48</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">15.06 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">18:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I forgot to post this I think</div>
+<div class="msg-time">18:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">dogs never idk like I said I never get turnt on by dogs like mmm maybe a wolf but not dogs</div>
+<div class="msg-time">18:50</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">are you willing to do more public video maybe in the hijab</div>
+<div class="msg-time">18:51</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I need to go out more</div>
+<div class="msg-time">18:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">U would want me fuck a dog?</div>
+<div class="msg-time">18:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Come on my dogs all female and they are puppy still</div>
+<div class="msg-time">18:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">there wolf dildos</div>
+<div class="msg-time">18:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Would love to see you use your hair curler a lot more</div>
+<div class="msg-time">18:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">It’ll get you ready for thicker toys</div>
+<div class="msg-time">18:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">No be honest I woulnt kick u I am just curious</div>
+<div class="msg-time">18:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I am gonna be bleeding a lot</div>
+<div class="msg-time">18:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">It would be hot</div>
+<div class="msg-time">18:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">First time I used it I bleeding a lot for like 3 weeks</div>
+<div class="msg-time">18:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Get some ky jelly</div>
+<div class="msg-time">18:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">And go slow</div>
+<div class="msg-time">18:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I am neverous to bled again</div>
+<div class="msg-time">18:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">G</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Gwright <span style="font-size:0.7rem;opacity:0.6">@Gwright1127</span></div>
+<div class="msg-text">I do like the cucumber idea</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">It’s normal because you’re not used to stretching it open</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I will try to first then I will use a dildo</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I threw my away since I couldn't really fit in me</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">It’s ok if you do bleed</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">We like it</div>
+<div class="msg-time">18:55</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">So u wouldnt care if I was on period either?</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Nope</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Nope not at all</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">It’s hot</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Good cuz my period is coming</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Even better</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ik right</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">We just want to see you goon</div>
+<div class="msg-time">18:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Especially when you’re fucking and it’s covering the cock you’re riding</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Mhm</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Bunny ear or no bunny ears</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">bunny ears</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">G</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Gwright <span style="font-size:0.7rem;opacity:0.6">@Gwright1127</span></div>
+<div class="msg-text">Definitely ears</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Or hijab I wear I am idk I wanna try all the styles</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Bunny ears</div>
+<div class="msg-time">18:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Should I act like a animal then</div>
+<div class="msg-time">18:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Please</div>
+<div class="msg-time">18:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">yes</div>
+<div class="msg-time">18:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Pant for us</div>
+<div class="msg-time">18:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">and bark</div>
+<div class="msg-time">18:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">School uniform or no?</div>
+<div class="msg-time">18:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Yes please</div>
+<div class="msg-time">18:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Would you squirt at school ?</div>
+<div class="msg-time">18:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">Jeven Helke</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">18:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Its just so I know what I should post but I am gonna get some lube and baby oil</div>
+<div class="msg-time">18:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">School has not started</div>
+<div class="msg-time">19:00</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">When it does</div>
+<div class="msg-time">19:00</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Yeah</div>
+<div class="msg-time">19:00</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">More pee stuff ?</div>
+<div class="msg-time">19:00</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">bunny could you try some anal?</div>
+<div class="msg-time">19:01</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I will</div>
+<div class="msg-time">19:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">cool</div>
+<div class="msg-time">19:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Like licking off the ground right?</div>
+<div class="msg-time">19:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text">In a bowl would be hot</div>
+<div class="msg-time">19:02</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Mmm ok then noted</div>
+<div class="msg-time">19:03</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Yeah off the ground since you did a bowl already</div>
+<div class="msg-time">19:03</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Anything else cuz I will be sleep the whole day</div>
+<div class="msg-time">19:03</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I just need ideas</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Or pee in parties then squeeze over mouth</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Panties</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text">Do ones saying your age</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Noted</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Pshhhhh</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-media">
+<div class="media-placeholder not-downloaded"><div class="media-icon">🎬</div><div class="media-info"><div class="media-name">VIDEO</div><div class="media-size">4.25 MB</div><div class="media-not-dl">file not included in export</div></div></div>
+</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Are u referring to this</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">A recent one ?</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text">Yeah more like that</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">&amp; how would you like to be rewarded if you do one of our requests</div>
+<div class="msg-time">19:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text">More recent while your playing with yourself</div>
+<div class="msg-time">19:05</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Mmm depends</div>
+<div class="msg-time">19:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ofc then</div>
+<div class="msg-time">19:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J</div>
+<div class="msg-text">Thank you</div>
+<div class="msg-time">19:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">D</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Daauo <span style="font-size:0.7rem;opacity:0.6">@Daaou33</span></div>
+<div class="msg-text">I love your public videos in the bathroom or out in open spitting and flashing</div>
+<div class="msg-time">19:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">G</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Gwright <span style="font-size:0.7rem;opacity:0.6">@Gwright1127</span></div>
+<div class="msg-text">Ever try to pee on your face?</div>
+<div class="msg-time">19:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I NEED TO TRY THIS</div>
+<div class="msg-time">19:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Asap</div>
+<div class="msg-time">19:07</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Trust me u WILL be seeing a video like that</div>
+<div class="msg-time">19:08</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ok I need to sleep any other cuz I will be a bit busy but when I get chance I will do it</div>
+<div class="msg-time">19:08</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">maybe dry humping more things</div>
+<div class="msg-time">19:08</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">H</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Holdien McNeil</div>
+<div class="msg-text">More public and almost getting caught type stuff</div>
+<div class="msg-time">19:09</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">H</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Holdien McNeil</div>
+<div class="msg-text">And deep throating</div>
+<div class="msg-time">19:09</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Yeah you giving some crazy head would be hot</div>
+<div class="msg-time">19:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">What about sectors</div>
+<div class="msg-time">19:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Sextapes</div>
+<div class="msg-time">19:11</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I never record my sex</div>
+<div class="msg-time">19:12</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Only I had the tip 2 times but that's it</div>
+<div class="msg-time">19:12</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">But that's a another story lmao</div>
+<div class="msg-time">19:13</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Anyways good night</div>
+<div class="msg-time">19:15</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I am logging out for God knows how long ehmm don't goon to much cuz I will post more</div>
+<div class="msg-time">19:15</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">J <span style="font-size:0.7rem;opacity:0.6">@JuannyF</span></div>
+<div class="msg-text">Good night pretty bunny</div>
+<div class="msg-time">19:16</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">V</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Vernard <span style="font-size:0.7rem;opacity:0.6">@vnutty</span></div>
+<div class="msg-text">Good night cutie</div>
+<div class="msg-time">19:19</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">Alex</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">21:46</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nope</div>
+<div class="msg-text">You should get a vibratator that you can put in when your going out or to school</div>
+<div class="msg-time">23:06</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nope</div>
+<div class="msg-text">And let us control it</div>
+<div class="msg-time">23:17</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#00b894">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#00b894">Justaguy</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">23:44</div>
+</div></div></div>
+<div class="date-sep"><span>July 7, 2026</span></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Bob <span style="font-size:0.7rem;opacity:0.6">@Williambutliquor</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">00:18</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">C</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Chr Barra <span style="font-size:0.7rem;opacity:0.6">@Spicy989</span></div>
+<div class="msg-text">Buttplug in school :)</div>
+<div class="msg-time">02:57</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fdcb6e">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fdcb6e">Ahsaann</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">03:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">S</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">S G</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Joe M</div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">05:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Tyler Jonesy</div>
+<div class="msg-text">A cute little bunny tail butt plug would be so hot</div>
+<div class="msg-time">06:37</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I just got one lol</div>
+<div class="msg-time">08:36</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">And a pink vibrator</div>
+<div class="msg-time">08:37</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">bunny you thought of buying a wolf dildo?</div>
+<div class="msg-time">08:40</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Do u think I should get it</div>
+<div class="msg-time">08:42</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Idk</div>
+<div class="msg-time">08:42</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Al El <span style="font-size:0.7rem;opacity:0.6">@newgoalie</span></div>
+<div class="msg-text">What about drinking from a martini glass 🙏🏼</div>
+<div class="msg-time">08:43</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Hahahaha</div>
+<div class="msg-time">08:44</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I genuinely can't fucking drink alcohol lmao I easily fucking pass out</div>
+<div class="msg-time">08:44</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I think it would be easy on me actually it's small</div>
+<div class="msg-time">08:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Al El <span style="font-size:0.7rem;opacity:0.6">@newgoalie</span></div>
+<div class="msg-text">😅 I meant peeing in a martini glass and drinking it</div>
+<div class="msg-time">08:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I am gonna buy fuck it</div>
+<div class="msg-time">08:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ohhhh</div>
+<div class="msg-time">08:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I think I got a glass sure</div>
+<div class="msg-time">08:45</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I bought a dildo kinda nervous a bit tho</div>
+<div class="msg-time">08:46</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">You’re gonna love it once you get used to it</div>
+<div class="msg-time">08:46</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I hope</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Do we get to see you use it tn ?</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">Just take it slow and lube is your friend</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">It's coming Thursday</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">I got lube already</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Al El <span style="font-size:0.7rem;opacity:0.6">@newgoalie</span></div>
+<div class="msg-text">You should get one with a suction cup so you can stick it on things</div>
+<div class="msg-time">08:47</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Ok then I am gonna probably post a lot when I get my vibrator and dildoooo</div>
+<div class="msg-time">08:48</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Oooo yk I got a bunny thing to</div>
+<div class="msg-time">08:48</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">Can’t wait</div>
+<div class="msg-time">08:48</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Pls don't goon to much</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">look up JulietToys they have wolf dildo about 5 inches</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">My is 6</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">It's perfect</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">No promises</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Sadly I will</div>
+<div class="msg-time">08:49</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">Will be gooning too much?</div>
+<div class="msg-time">08:50</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Well yes cuz it's my vibrator</div>
+<div class="msg-time">08:50</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Anways just letting u what I got</div>
+<div class="msg-time">08:51</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">A</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">A A</div>
+<div class="msg-text">Will you do a live</div>
+<div class="msg-time">08:52</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#74b9ff">H</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#74b9ff">Holdien McNeil</div>
+<div class="msg-text">Will you make noises?</div>
+<div class="msg-time">08:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">I trying to see her get knotting on a wolf toy tbh</div>
+<div class="msg-time">08:54</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">We can tell lol</div>
+<div class="msg-time">08:56</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#fd79a8">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#fd79a8">blackhoodieguy <span style="font-size:0.7rem;opacity:0.6">@blackhoodguy</span></div>
+<div class="msg-text">sorry I have thing for puppy play</div>
+<div class="msg-time">08:58</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">I’m not judging</div>
+<div class="msg-time">08:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">M</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">M R</div>
+<div class="msg-text">Carrot video when?</div>
+<div class="msg-time">09:05</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nope</div>
+<div class="msg-text">I am</div>
+<div class="msg-time">09:21</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#6c5ce7">N</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#6c5ce7">Nope</div>
+<div class="msg-text">A lil</div>
+<div class="msg-time">09:22</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Lol</div>
+<div class="msg-time">09:26</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text">Why should I</div>
+<div class="msg-time">09:26</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#e17055">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#e17055">Tͥõmá Koͣmͫachi <span style="font-size:0.7rem;opacity:0.6">@grizzygrazzy</span></div>
+<div class="msg-text">I was saying I wasn’t gonna judge him for whatever he’s into</div>
+<div class="msg-time">09:28</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">J</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Joe M</div>
+<div class="msg-text">I wish I could paint those braces I love them with that smile</div>
+<div class="msg-time">09:39</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">T</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Tony <span style="font-size:0.7rem;opacity:0.6">@Dante0656</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">13:59</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">Bunny <span style="font-size:0.7rem;opacity:0.6">@dzhokhar79</span></div>
+<div class="msg-text" style="color:#6c7883;font-style:italic">(no text)</div>
+<div class="msg-time">14:04</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#0984e3">B</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#0984e3">Big H <span style="font-size:0.7rem;opacity:0.6">@unix1012</span></div>
+<div class="msg-text">Would be hot to watch u touch urself on like monkey</div>
+<div class="msg-time">15:53</div>
+</div></div></div>
+<div class="msg-row in">
+<div class="avatar-col"><div class="avatar" style="background:#55efc4">S</div></div>
+<div class="bubble-col"><div class="bubble in">
+<div class="sender-name" style="color:#55efc4">S G</div>
+<div class="msg-text">Dirty / degrading yourself</div>
+<div class="msg-time">15:54</div>
+</div></div></div>
+</div></body></html>

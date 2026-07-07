@@ -2723,15 +2723,19 @@ def export_chat(chat_id):
 
 # ── Background export job system ─────────────────────────────────────────────
 
-async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media, chat_name, safe_name):
+async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media,
+                          chat_name, safe_name, from_date_ts=None):
     """Long-running async export worker — runs in _loop, not in a request thread."""
     job = export_jobs[job_id]
     import zipfile as _zipfile, json as _json, tempfile as _tempfile
     try:
         async def _do(client):
             job['status'] = 'fetching'
+            from_label = job.get('from_date') or ''
+            step_prefix = f"From {from_label} — " if from_label else ""
             raw, offset_id = [], 0
-            while True:
+            done = False
+            while not done:
                 batch_limit = 200 if max_msgs == 0 else min(200, max_msgs - len(raw))
                 if batch_limit <= 0:
                     break
@@ -2739,17 +2743,30 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
                 async for m in client.get_chat_history(
                     chat_id_int, limit=batch_limit, offset_id=offset_id or 0
                 ):
+                    # Stop at from_date boundary (history comes newest→oldest)
+                    if from_date_ts is not None:
+                        try:
+                            msg_ts = m.date.timestamp()
+                        except Exception:
+                            msg_ts = 0
+                        if msg_ts < from_date_ts:
+                            done = True
+                            break
                     batch.append(m)
                 if not batch:
                     break
                 raw.extend(batch)
                 offset_id = batch[-1].id
                 job['fetched'] = len(raw)
-                job['step'] = f"Fetching messages… {len(raw):,}"
+                job['step'] = f"{step_prefix}Fetching messages… {len(raw):,}"
+                if done:
+                    break
                 if max_msgs != 0 and len(raw) >= max_msgs:
                     break
                 if len(batch) < batch_limit:
                     break
+                # Small pause between batches to reduce Telegram FloodWait pressure
+                await asyncio.sleep(0.3)
             raw.reverse()
 
             messages = [_build_msg_dict(m) for m in raw]
@@ -2852,6 +2869,41 @@ async def _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_
             except Exception: pass
 
 
+@app.route("/api/chat-date-range/<chat_id>")
+@api_login_required
+def chat_date_range(chat_id):
+    """Return the newest and oldest message dates for the given chat (fast — fetches 2 msgs)."""
+    session_str = session.get("session_string")
+    if not session_str:
+        return jsonify({"error": "No session"}), 401
+    try:
+        chat_id_int = int(chat_id)
+    except Exception:
+        chat_id_int = chat_id
+
+    async def _do(client):
+        newest = oldest = None
+        # Newest: first message in default history order
+        async for m in client.get_chat_history(chat_id_int, limit=1):
+            newest = m.date.isoformat()
+            break
+        # Oldest: use offset_id=1 trick — fetch 1 msg starting from the very beginning
+        try:
+            async for m in client.get_chat_history(chat_id_int, limit=1, offset_id=1, offset=-1):
+                oldest = m.date.isoformat()
+                break
+        except Exception:
+            pass
+        return {"newest": newest, "oldest": oldest}
+
+    try:
+        result = run_async(run_with_reconnect(session_str, _do))
+        return jsonify(result)
+    except Exception as e:
+        logger.warning(f"chat_date_range error: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/export-job/<chat_id>", methods=["POST"])
 @api_login_required
 def start_export_job(chat_id):
@@ -2866,6 +2918,18 @@ def start_export_job(chat_id):
     max_raw = str(data.get("max", 5000))
     max_msgs = 0 if max_raw in ("0", "all") else max(1, int(max_raw))
     skip_media = bool(data.get("skip_media", False))
+
+    # from_date: "YYYY-MM-DD" string → UTC midnight timestamp (float) or None
+    from_date_str = data.get("from_date", "").strip()
+    from_date_ts = None
+    if from_date_str:
+        try:
+            from datetime import timezone as _tz2
+            fd = datetime.strptime(from_date_str, "%Y-%m-%d").replace(tzinfo=_tz2.utc)
+            from_date_ts = fd.timestamp()
+        except Exception:
+            pass
+
     try:
         chat_id_int = int(chat_id)
     except Exception:
@@ -2879,12 +2943,13 @@ def start_export_job(chat_id):
     export_jobs[job_id] = {
         "status": "pending", "step": "Starting…",
         "fetched": 0, "total": 0, "media_done": 0, "media_total": 0,
-        "fmt": fmt, "chat_name": chat_name,
+        "fmt": fmt, "chat_name": chat_name, "from_date": from_date_str,
         "path": None, "filename": None, "mimetype": None, "error": None,
         "created": time.time(),
     }
     asyncio.run_coroutine_threadsafe(
-        _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media, chat_name, safe_name),
+        _run_export_job(job_id, session_str, chat_id_int, fmt, max_msgs, skip_media,
+                        chat_name, safe_name, from_date_ts),
         _loop
     )
     return jsonify({"job_id": job_id})
