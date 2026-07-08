@@ -23,9 +23,18 @@ WorkingDirectory=/opt/tgviewer
 EnvironmentFile=/opt/tgviewer/.env
 
 # Gunicorn from the project virtualenv — no system-wide path assumptions
+#
+# ⚠ MUST stay at --workers 1. This app keeps its Telegram client connections,
+# caches, and dialog snapshots in plain in-process Python memory (see
+# `telegram_clients` in app.py) rather than a shared store like Redis. Each
+# gunicorn worker is a separate OS process with its own private memory, so
+# running >1 worker means two processes can independently open a live
+# Telegram connection using the SAME session string — which Telegram treats
+# as a duplicate session and starts terminating. Concurrency is handled with
+# threads instead, which share the same process memory safely.
 ExecStart=/opt/tgviewer/.venv/bin/gunicorn \
-    --workers 2 \
-    --threads 1 \
+    --workers 1 \
+    --threads 4 \
     --timeout 3600 \
     --bind 127.0.0.1:5000 \
     --access-logfile /var/log/tgviewer/access.log \
