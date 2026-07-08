@@ -335,8 +335,15 @@ with app.app_context():
 
 # ── Telegram config ───────────────────────────────────────────────────────────
 
-API_ID      = int(os.environ.get("API_ID", "12345"))
-API_HASH    = os.environ.get("API_HASH", "your_api_hash_here")
+_api_id_raw = os.environ.get("API_ID", "").strip()
+if not _api_id_raw or not _api_id_raw.isdigit():
+    raise RuntimeError("API_ID environment variable is not set or invalid. Set it in Replit Secrets before starting the app.")
+API_ID = int(_api_id_raw)
+
+API_HASH = os.environ.get("API_HASH", "").strip()
+if not API_HASH or API_HASH == "your_api_hash_here":
+    raise RuntimeError("API_HASH environment variable is not set. Set it in Replit Secrets before starting the app.")
+
 APP_PASSWORD = os.environ.get("APP_PASSWORD", "").strip()
 if not APP_PASSWORD:
     raise RuntimeError("APP_PASSWORD environment variable is not set. Set it in Replit Secrets before starting the app.")
