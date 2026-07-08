@@ -656,6 +656,28 @@ def _invalidate_dialog_cache(session_key: str):
     with _dialog_snapshot_lock:
         _dialog_snapshots.pop(session_key, None)
 
+def _is_peer_invalid(e) -> bool:
+    return "PEER_ID_INVALID" in str(e)
+
+async def _resync_peers(client, session_key=None):
+    """Force a fresh get_dialogs() scan to re-resolve peer access hashes.
+
+    Pyrogram (especially with in_memory=True sessions) only learns a peer's
+    access_hash by seeing it in get_dialogs() or incoming updates. Right after
+    a fresh login, or after the process restarts, that cache is empty — so
+    calling get_chat()/get_chat_history() by numeric ID can fail with
+    PEER_ID_INVALID even for chats the account is still a normal member of.
+    Re-scanning dialogs repopulates the cache; if the chat is still present
+    there, the retry succeeds.
+    """
+    try:
+        if session_key:
+            _invalidate_dialog_cache(session_key)
+        async for _ in client.get_dialogs():
+            pass
+    except Exception as exc:
+        logger.warning(f"_resync_peers failed: {exc}")
+
 # ── Chat info cache — avoids an extra get_chat() round-trip per message load ──
 _chat_info_cache: dict = {}        # (session_key, chat_id) -> {"name":str,"can_manage":bool,"exp":float}
 _chat_info_lock = threading.Lock()
@@ -1125,7 +1147,7 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
             return cached
 
     try:
-        async def _do(client):
+        async def _do(client, _resynced=False):
             # Chat metadata (name + can_manage) is cached for 1 hour so we don't
             # fire an extra get_chat() round-trip on every uncached message fetch.
             now = time.time()
@@ -1170,6 +1192,10 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                         messages.append(_build_msg_dict(msg))
                     messages.sort(key=lambda x: x["id"], reverse=True)
                 except Exception as e:
+                    if _is_peer_invalid(e) and not _resynced:
+                        logger.warning(f"search_messages PEER_ID_INVALID for {chat_id} — resyncing dialogs and retrying")
+                        await _resync_peers(client, session_key=sk)
+                        return await _do(client, _resynced=True)
                     logger.warning(f"search_messages failed for {chat_id}: {e}")
                     return {"error": f"Could not search messages: {e}"}
             elif media_only:
@@ -1188,6 +1214,10 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                             has_more = True
                             break
                 except Exception as e:
+                    if _is_peer_invalid(e) and not _resynced:
+                        logger.warning(f"get_chat_history (media) PEER_ID_INVALID for {chat_id} — resyncing dialogs and retrying")
+                        await _resync_peers(client, session_key=sk)
+                        return await _do(client, _resynced=True)
                     logger.warning(f"get_chat_history (media) failed for {chat_id}: {e}")
                     if not messages:
                         return {"error": f"Could not load media: {e}"}
@@ -1197,9 +1227,19 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                         messages.append(_build_msg_dict(msg))
                     has_more = len(messages) >= limit
                 except Exception as e:
+                    if _is_peer_invalid(e) and not _resynced:
+                        logger.warning(f"get_chat_history PEER_ID_INVALID for {chat_id} — resyncing dialogs and retrying")
+                        await _resync_peers(client, session_key=sk)
+                        return await _do(client, _resynced=True)
                     logger.warning(f"get_chat_history failed for {chat_id}: {e}")
                     if not messages:
-                        return {"error": f"Could not load messages: {e}"}
+                        return {
+                            "error": (
+                                "This chat is no longer reachable on your Telegram "
+                                "account (you may have left it, been removed, or it "
+                                "was deleted). Telegram error: " + str(e)
+                            ) if _is_peer_invalid(e) else f"Could not load messages: {e}"
+                        }
 
             return {
                 "messages": messages,
