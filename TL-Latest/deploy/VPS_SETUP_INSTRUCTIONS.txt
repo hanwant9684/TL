@@ -1,0 +1,163 @@
+=======================================================================
+ TELEGRAM VIEWER — VPS DEPLOYMENT INSTRUCTIONS
+=======================================================================
+
+These steps set up the app on a fresh Ubuntu/Debian VPS so it runs
+24/7, independent of any browser tab, and reconnects your Telegram
+session automatically.
+
+-----------------------------------------------------------------------
+STEP 1 — Clone the project
+-----------------------------------------------------------------------
+git clone https://github.com/hanwant9684/TL.git
+cd TL/TL-Latest
+
+-----------------------------------------------------------------------
+STEP 2 — Run the setup script
+-----------------------------------------------------------------------
+Installs system packages, creates a dedicated "tgviewer" service user,
+sets up a Python virtual environment, and installs dependencies.
+
+sudo bash deploy/setup.sh
+
+This installs the app to /opt/tgviewer by default.
+To install elsewhere: sudo bash deploy/setup.sh /custom/path
+
+-----------------------------------------------------------------------
+STEP 3 — Configure environment variables
+-----------------------------------------------------------------------
+sudo cp /opt/tgviewer/deploy/.env.example /opt/tgviewer/.env
+sudo nano /opt/tgviewer/.env
+
+Fill in these required values:
+  API_ID          -> your Telegram API ID
+  API_HASH        -> your Telegram API hash
+  APP_PASSWORD    -> the password you'll use to log into the web app
+  SESSION_SECRET  -> any long random string (32+ characters)
+
+Leave DATABASE_URL commented out/blank. This makes the app use SQLite
+(a simple file-based database) — no extra database server needed.
+Only switch to PostgreSQL if you specifically need it (see note at
+the bottom of this file).
+
+Then lock down the file:
+sudo chmod 600 /opt/tgviewer/.env
+sudo chown tgviewer:tgviewer /opt/tgviewer/.env
+
+-----------------------------------------------------------------------
+STEP 4 — Install and start the systemd service
+-----------------------------------------------------------------------
+This keeps the app running permanently, restarts it automatically if
+it crashes, and starts it on server reboot.
+
+sudo cp /opt/tgviewer/deploy/tgviewer.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable tgviewer
+sudo systemctl start tgviewer
+sudo systemctl status tgviewer
+
+You should see "Active: active (running)" with no repeating errors.
+
+-----------------------------------------------------------------------
+STEP 5 — Configure nginx (reverse proxy)
+-----------------------------------------------------------------------
+sudo nano /opt/tgviewer/deploy/nginx.conf
+  -> change "server_name your-domain.com;" to your VPS IP or domain,
+     e.g. "server_name 176.100.39.60;"
+
+sudo cp /opt/tgviewer/deploy/nginx.conf /etc/nginx/sites-available/tgviewer
+sudo ln -sf /etc/nginx/sites-available/tgviewer /etc/nginx/sites-enabled/
+sudo nginx -t && sudo systemctl reload nginx
+
+-----------------------------------------------------------------------
+STEP 6 — Open the app
+-----------------------------------------------------------------------
+In your browser go to:
+  http://YOUR_VPS_IP
+
+Log in with the APP_PASSWORD you set in step 3, then paste your
+Telegram session string when prompted.
+
+=======================================================================
+ HOW THE SESSION STAYS CONNECTED
+=======================================================================
+Closing your browser tab only ends your HTTP connection to the web
+app — it does NOT log you out of Telegram. The systemd service keeps
+the Flask/Gunicorn process running 24/7 on the VPS, and the Pyrogram
+client inside it holds its own separate connection to Telegram that
+stays alive independently of your browser.
+
+=======================================================================
+ USEFUL COMMANDS
+=======================================================================
+Check status:      sudo systemctl status tgviewer
+View live logs:     sudo journalctl -u tgviewer -f
+Restart app:        sudo systemctl restart tgviewer
+Stop app:           sudo systemctl stop tgviewer
+
+=======================================================================
+ TROUBLESHOOTING
+=======================================================================
+"502 Bad Gateway" in browser
+  -> The app crashed or isn't running. Check:
+     sudo systemctl status tgviewer
+
+"password authentication failed" / DB errors in logs
+  -> Your .env has a leftover DATABASE_URL pointing at a PostgreSQL
+     database that doesn't exist. Comment it out to use SQLite instead:
+     sudo sed -i 's/^DATABASE_URL=postgresql/#DATABASE_URL=postgresql/' /opt/tgviewer/.env
+     sudo systemctl restart tgviewer
+
+"no such column" errors in logs
+  -> The database file has an outdated schema (stale/corrupted db).
+     Delete it and let the app recreate it fresh:
+     sudo rm -f /opt/tgviewer/instance/app.db
+     sudo chown tgviewer:tgviewer /opt/tgviewer/instance
+     sudo systemctl restart tgviewer
+     NOTE: this deletes preserved media / download history stored in
+     the database. Back it up first if you need to keep that data —
+     see "MOVING TO A NEW VPS" below.
+
+nginx config test fails
+  -> Make sure the line is exactly:
+       server_name YOUR_IP_OR_DOMAIN;
+     (not just the IP/domain on its own — "server_name" is required)
+
+=======================================================================
+ MOVING TO A NEW VPS / PRESERVING DATA
+=======================================================================
+Session strings, preserved media, and download history all live in
+the database file at /opt/tgviewer/instance/app.db (SQLite) on each
+VPS separately. If you set up a new VPS and want to keep your
+existing data, copy that file over BEFORE first starting the service:
+
+  scp /opt/tgviewer/instance/app.db user@NEW_VPS_IP:/opt/tgviewer/instance/app.db
+
+Otherwise, just paste your Telegram session string again on the new
+VPS — a fresh empty database will be created automatically.
+
+=======================================================================
+ OPTIONAL: PostgreSQL INSTEAD OF SQLite
+=======================================================================
+Only do this if you expect multiple people using the app at once, or
+you have a specific reason to prefer PostgreSQL.
+
+sudo apt-get install -y postgresql
+sudo -u postgres psql -c "CREATE USER tgviewer WITH PASSWORD 'choose_a_password';"
+sudo -u postgres psql -c "CREATE DATABASE tgviewer OWNER tgviewer;"
+
+Then in /opt/tgviewer/.env set:
+  DATABASE_URL=postgresql://tgviewer:choose_a_password@localhost/tgviewer
+
+sudo systemctl restart tgviewer
+
+=======================================================================
+ SECRET CHATS — IMPORTANT LIMITATION
+=======================================================================
+Telegram secret chats use device-specific end-to-end encryption. The
+encryption keys are generated on and locked to the original device
+(your phone/desktop Telegram app) and are never sent to Telegram's
+servers. This means NO API-based client — including this app — can
+read secret chat messages. This is a Telegram protocol limitation,
+not a bug or missing feature here.
+=======================================================================

@@ -497,18 +497,25 @@ def create_telegram_client(session_string):
 
     @client.on_message(pyro_filters.outgoing)
     async def save_outgoing(c, m):
-        """Preserve YOUR OWN sent media — but ONLY in protected chats.
+        """Preserve YOUR OWN sent media — in protected chats, OR whenever it's
+        view-once media (self-destructing photos/videos you send yourself also
+        disappear after being opened, so they need saving too).
 
-        Previously this ran _auto_preserve for every outgoing message regardless
-        of chat, which caused unnecessary Telegram download calls.  We now check
-        the in-memory protected-chat set first and bail early.
+        We check the in-memory protected-chat set first (cheap) and only fall
+        back to inspecting the media object for ttl_seconds when the chat isn't
+        protected, to avoid unnecessary work on ordinary outgoing messages.
         """
         try:
             chat_id = m.chat.id if m.chat else None
             if not chat_id:
                 return
-            # Fast in-memory check — no DB round-trip on every outgoing message.
-            if chat_id not in _get_protected_set(session_key):
+            is_protected = chat_id in _get_protected_set(session_key)
+            is_view_once = False
+            if not is_protected and m.media:
+                media_type = m.media.value
+                media_obj = getattr(m, media_type, None)
+                is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
+            if not is_protected and not is_view_once:
                 return
             await _auto_preserve(c, m, session_key)
         except Exception as e:
