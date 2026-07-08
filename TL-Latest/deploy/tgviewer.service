@@ -1,0 +1,44 @@
+# Systemd service unit for Telegram Viewer
+# 
+# INSTALL:
+#   1. Edit WorkingDirectory and EnvironmentFile paths below
+#   2. cp tgviewer.service /etc/systemd/system/
+#   3. systemctl daemon-reload
+#   4. systemctl enable tgviewer
+#   5. systemctl start tgviewer
+#   6. systemctl status tgviewer    (check it's running)
+
+[Unit]
+Description=Telegram Viewer
+After=network.target
+# If using PostgreSQL, uncomment:
+# After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=www-data
+# ⚠ Change this to the actual path where you placed the project
+WorkingDirectory=/opt/tgviewer
+
+# ⚠ Change this to the actual path of your .env file
+EnvironmentFile=/opt/tgviewer/.env
+
+# Gunicorn: 2 workers, 1 thread each, 1h timeout (for long exports)
+ExecStart=/usr/local/bin/gunicorn \
+    --workers 2 \
+    --threads 1 \
+    --timeout 3600 \
+    --bind 127.0.0.1:5000 \
+    --access-logfile /var/log/tgviewer/access.log \
+    --error-logfile /var/log/tgviewer/error.log \
+    app:app
+
+Restart=always
+RestartSec=5
+
+# Basic hardening
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
