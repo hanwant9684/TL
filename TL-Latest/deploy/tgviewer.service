@@ -1,30 +1,29 @@
 # Systemd service unit for Telegram Viewer
-# 
+#
 # INSTALL:
-#   1. Edit WorkingDirectory and EnvironmentFile paths below
-#   2. cp tgviewer.service /etc/systemd/system/
-#   3. systemctl daemon-reload
-#   4. systemctl enable tgviewer
-#   5. systemctl start tgviewer
-#   6. systemctl status tgviewer    (check it's running)
+#   sudo cp tgviewer.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable tgviewer
+#   sudo systemctl start tgviewer
+#   sudo systemctl status tgviewer
 
 [Unit]
 Description=Telegram Viewer
 After=network.target
-# If using PostgreSQL, uncomment:
+# If using PostgreSQL, uncomment the next line:
 # After=network.target postgresql.service
 
 [Service]
 Type=simple
-User=www-data
-# ⚠ Change this to the actual path where you placed the project
-WorkingDirectory=/opt/tgviewer
+User=tgviewer
+Group=tgviewer
 
-# ⚠ Change this to the actual path of your .env file
+# ⚠ Change /opt/tgviewer to your actual install path if different
+WorkingDirectory=/opt/tgviewer
 EnvironmentFile=/opt/tgviewer/.env
 
-# Gunicorn: 2 workers, 1 thread each, 1h timeout (for long exports)
-ExecStart=/usr/local/bin/gunicorn \
+# Gunicorn from the project virtualenv — no system-wide path assumptions
+ExecStart=/opt/tgviewer/.venv/bin/gunicorn \
     --workers 2 \
     --threads 1 \
     --timeout 3600 \
@@ -36,9 +35,11 @@ ExecStart=/usr/local/bin/gunicorn \
 Restart=always
 RestartSec=5
 
-# Basic hardening
+# Hardening
 NoNewPrivileges=true
 PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/opt/tgviewer /var/log/tgviewer
 
 [Install]
 WantedBy=multi-user.target
