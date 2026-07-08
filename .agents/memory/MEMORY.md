@@ -1,1 +1,2 @@
 - [Postgres startup recovery causes transient 500s](db-startup-recovery.md) — after a workflow restart, managed Postgres can still be "recovering" for a few minutes; don't assume real bug from early 500s.
+- [View-once media preservation — root causes and fix](preserve-media-view-once.md) — photo=null in MTProto update; use get_messages() fallback + raw_update handler + 3-strategy download waterfall.

@@ -1309,6 +1309,8 @@ function buildBubbleHTML(msg) {
         `<div class="sender-name" style="color:${esc(senderColor(msg.sender_key||''))}">${esc(msg.sender_name)}${msg.sender_username ? `<span class="sender-username">@${esc(msg.sender_username)}</span>` : ''}</div>` : '';
     const fwdLine = msg.forward_from ?
         `<div class="fwd-label">Forwarded from ${esc(msg.forward_from)}</div>` : '';
+    const viewOnceLine = msg.is_view_once
+        ? `<div style="margin-bottom:4px;"><span class="badge-view-once" title="This is a view-once message — media has been preserved automatically">👁 View-once</span></div>` : '';
     const textLine = msg.text ? `<div class="msg-text">${esc(msg.text)}</div>` : '';
     let mediaHtml = '';
     if (msg.has_media) {
@@ -1394,7 +1396,7 @@ function buildBubbleHTML(msg) {
     }
     const deleteBtn = currentChatManage ? `<button class="action-btn del" onclick="deleteMsg(${msg.id})">Delete</button>` : '';
     const translateBtn = msg.text ? `<button class="action-btn" onclick="translateMsg(${msg.id},this)">Translate</button>` : '';
-    return `${senderLine}${fwdLine}${textLine}${mediaHtml}
+    return `${senderLine}${fwdLine}${viewOnceLine}${textLine}${mediaHtml}
         <div class="msg-meta">
             ${translateBtn}${deleteBtn}
             <span class="msg-time">${formatTime(msg.date)}</span>

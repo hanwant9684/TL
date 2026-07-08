@@ -263,6 +263,14 @@ class PreservedMedia(db.Model):
     original_deleted = db.Column(db.Boolean, default=False)
     file_data        = db.Column(db.LargeBinary)  # binary copy stored in DB — survives redeploys
 
+    __table_args__ = (
+        # Unique guard: prevents two concurrent handlers from both inserting the
+        # same message (race between on_message and the raw update safety-net).
+        # _auto_preserve catches IntegrityError from this and treats it as a no-op.
+        db.UniqueConstraint('session_key', 'chat_id', 'message_id',
+                            name='uq_preserved_media_identity'),
+    )
+
 class ProtectedChat(db.Model):
     id          = db.Column(db.Integer, primary_key=True)
     session_key = db.Column(db.String(32), nullable=False)
@@ -324,6 +332,10 @@ with app.app_context():
                 "ALTER TABLE preserved_media ADD COLUMN IF NOT EXISTS file_data bytea",
                 "ALTER TABLE stored_session ADD COLUMN IF NOT EXISTS reconnect_failed boolean DEFAULT false",
                 "ALTER TABLE server_download ADD COLUMN IF NOT EXISTS file_data bytea",
+                # Unique constraint added to prevent duplicate inserts from concurrent
+                # on_message + raw_update handlers for the same view-once message.
+                "CREATE UNIQUE INDEX IF NOT EXISTS uq_preserved_media_identity "
+                "ON preserved_media (session_key, chat_id, message_id)",
             ]:
                 try:
                     _conn.execute(text(_stmt))
@@ -392,73 +404,187 @@ _PRESERVE_EXT = {
 }
 
 async def _auto_preserve(client, msg, session_key):
-    """Download and record media that should be preserved (view-once or protected chat)."""
+    """Download and record media that should be preserved (view-once or protected chat).
+
+    Three-strategy download waterfall:
+      S1 — download_media(msg, file_name=path)   standard path-based download
+      S2 — download_media(msg, in_memory=True)   memory download, we write bytes
+      S3 — download_media(file_id, in_memory=True) direct file-id bypass
+
+    View-once detection has two layers:
+      Primary  — ttl_seconds on the parsed Pyrogram media object (covers timer
+                 mode and most view-once where the server sent the photo object)
+      Fallback — when msg.photo / msg.video is None (Telegram sends photo=null
+                 in MessageMediaPhoto for true view-once in newer API layers),
+                 we immediately call get_messages() to fetch the full message
+                 from the server — the file is still there until the recipient
+                 opens it and readMessageContents fires, which we never call.
+    """
     if not msg or not msg.media:
         return
     media_type = msg.media.value if msg.media else None
     if not media_type or media_type not in _PRESERVE_EXT:
         return
 
-    media_obj = getattr(msg, media_type, None)
-    chat_id   = msg.chat.id if msg.chat else None
+    chat_id = msg.chat.id if msg.chat else None
     if not chat_id:
         return
 
-    # Detect view-once (ttl_seconds set on the media object)
+    media_obj = getattr(msg, media_type, None)
+
+    # ── Primary view-once detection ───────────────────────────────────────────
     is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
 
-    # Use in-memory protected-chat set to avoid a DB round-trip on every message.
-    # The set is loaded from DB once per session and stays hot in memory.
+    # ── Fallback: photo=null in update (true view-once in newer Telegram) ─────
+    # When Telegram sends MessageMediaPhoto with flags.0 (photo) unset but
+    # flags.2 (ttl_seconds) set, Pyrogram sets msg.photo = None.  We detect
+    # this as (media_obj is None AND media type is a visual type) and fetch the
+    # full message immediately.  The server still has the file because no client
+    # has called readMessageContents yet.
+    if not is_view_once and media_obj is None and media_type in ('photo', 'video', 'voice', 'video_note'):
+        try:
+            fresh = await asyncio.wait_for(
+                client.get_messages(chat_id, msg.id),
+                timeout=15
+            )
+            if fresh and fresh.media and fresh.media.value == media_type:
+                fresh_obj = getattr(fresh, media_type, None)
+                if fresh_obj is not None:
+                    media_obj   = fresh_obj
+                    msg         = fresh
+                    is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
+                    if is_view_once:
+                        logger.info(f"[preserve] recovered view-once {media_type} "
+                                    f"for msg {msg.id} via get_messages (photo was null in update)")
+        except Exception as fe:
+            logger.debug(f"[preserve] get_messages fallback failed for msg {msg.id}: {fe}")
+
+    # ── Protected-chat detection ──────────────────────────────────────────────
     is_protected = chat_id in _get_protected_set(session_key)
 
     if not is_view_once and not is_protected:
         return
 
-    # Skip if already preserved — DB check only happens when we actually need it.
+    # ── Duplicate guard ───────────────────────────────────────────────────────
     with app.app_context():
         if PreservedMedia.query.filter_by(
             session_key=session_key, chat_id=chat_id, message_id=msg.id
         ).first():
             return
 
-    reason = "view_once" if is_view_once else "protected"
-    raw_name = getattr(media_obj, 'file_name', None)
+    reason   = "view_once" if is_view_once else "protected"
+    raw_name = (getattr(media_obj, 'file_name', None) if media_obj else None)
     if not raw_name:
         raw_name = f"{media_type}_{msg.id}{_PRESERVE_EXT.get(media_type, '.bin')}"
     safe_name = f"{session_key[:8]}_{chat_id}_{msg.id}_{_sanitize_filename(raw_name)}"
-    dest = os.path.join(PRESERVED_DIR, safe_name)
+    dest      = os.path.join(PRESERVED_DIR, safe_name)
 
+    # ── Multi-strategy download ───────────────────────────────────────────────
+    file_bytes = None
+    downloaded = None
+
+    # S1: standard path-based download
     try:
-        downloaded = await asyncio.wait_for(
+        result = await asyncio.wait_for(
             client.download_media(msg, file_name=dest),
             timeout=90
         )
-        if downloaded and os.path.exists(downloaded):
-            size = os.path.getsize(downloaded)
-            # Read bytes into DB so the file survives redeploys
+        if result and os.path.exists(str(result)):
+            downloaded = str(result)
+            logger.debug(f"[preserve] S1 success msg {msg.id}")
+    except Exception as e1:
+        logger.warning(f"[preserve] S1 failed msg {msg.id} "
+                       f"({media_type}, view_once={is_view_once}): "
+                       f"{type(e1).__name__}: {e1}")
+
+    # S2: download into memory, write ourselves — avoids partial-file edge cases
+    if not downloaded:
+        try:
+            data = await asyncio.wait_for(
+                client.download_media(msg, in_memory=True),
+                timeout=90
+            )
+            if data:
+                file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
+                with open(dest, 'wb') as fh:
+                    fh.write(file_bytes)
+                downloaded = dest
+                logger.debug(f"[preserve] S2 (in_memory) success msg {msg.id}")
+        except Exception as e2:
+            logger.warning(f"[preserve] S2 failed msg {msg.id}: "
+                           f"{type(e2).__name__}: {e2}")
+
+    # S3: download via file_id directly — bypasses the message reference,
+    # useful when the message's file_reference has expired but the file itself
+    # is still accessible (common for TTL media)
+    if not downloaded and media_obj:
+        file_id = getattr(media_obj, 'file_id', None)
+        if file_id:
             try:
-                with open(downloaded, "rb") as fh:
+                data = await asyncio.wait_for(
+                    client.download_media(file_id, in_memory=True),
+                    timeout=90
+                )
+                if data:
+                    file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
+                    with open(dest, 'wb') as fh:
+                        fh.write(file_bytes)
+                    downloaded = dest
+                    logger.debug(f"[preserve] S3 (file_id) success msg {msg.id}")
+            except Exception as e3:
+                logger.warning(f"[preserve] S3 failed msg {msg.id}: "
+                               f"{type(e3).__name__}: {e3}")
+
+    if not downloaded:
+        logger.error(
+            f"[preserve] ALL strategies failed — msg {msg.id} "
+            f"chat {chat_id} type={media_type} view_once={is_view_once} "
+            f"media_obj={'present' if media_obj else 'NULL (photo was absent in update)'}"
+        )
+        return
+
+    # ── Persist to DB ─────────────────────────────────────────────────────────
+    try:
+        size = os.path.getsize(downloaded)
+        if file_bytes is None:
+            try:
+                with open(downloaded, 'rb') as fh:
                     file_bytes = fh.read()
             except Exception:
                 file_bytes = None
-            with app.app_context():
-                db.session.add(PreservedMedia(
-                    session_key      = session_key,
-                    chat_id          = chat_id,
-                    message_id       = msg.id,
-                    file_path        = downloaded,
-                    file_name        = raw_name,
-                    file_size        = size,
-                    media_type       = media_type,
-                    reason           = reason,
-                    saved_at         = msg.date or datetime.utcnow(),
-                    original_deleted = False,
-                    file_data        = file_bytes,
-                ))
-                db.session.commit()
-            logger.info(f"Preserved [{reason}] {raw_name} ({format_file_size(size)})")
-    except Exception as e:
-        logger.error(f"_auto_preserve failed for msg {msg.id}: {e}")
+        with app.app_context():
+            db.session.add(PreservedMedia(
+                session_key      = session_key,
+                chat_id          = chat_id,
+                message_id       = msg.id,
+                file_path        = downloaded,
+                file_name        = raw_name,
+                file_size        = size,
+                media_type       = media_type,
+                reason           = reason,
+                saved_at         = msg.date or datetime.utcnow(),
+                original_deleted = False,
+                file_data        = file_bytes,
+            ))
+            db.session.commit()
+        logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
+    except Exception as dbe:
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+        if isinstance(dbe, _IntegrityError):
+            # Duplicate — another handler (on_message vs raw safety-net race)
+            # already saved this message.  Treat as a successful no-op.
+            logger.debug(f"[preserve] duplicate insert ignored for msg {msg.id} "
+                         f"(uq_preserved_media_identity) — already preserved")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+        else:
+            logger.error(f"[preserve] DB write failed msg {msg.id}: {dbe}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
 
 def create_telegram_client(session_string):
@@ -511,6 +637,10 @@ def create_telegram_client(session_string):
         We check the in-memory protected-chat set first (cheap) and only fall
         back to inspecting the media object for ttl_seconds when the chat isn't
         protected, to avoid unnecessary work on ordinary outgoing messages.
+
+        Note: media_obj can be None for true view-once in newer Telegram layers
+        (photo=null in update). _auto_preserve handles the fallback get_messages()
+        call to recover the media object in that case.
         """
         try:
             chat_id = m.chat.id if m.chat else None
@@ -520,13 +650,116 @@ def create_telegram_client(session_string):
             is_view_once = False
             if not is_protected and m.media:
                 media_type = m.media.value
-                media_obj = getattr(m, media_type, None)
+                media_obj  = getattr(m, media_type, None)
+                # media_obj can be None for view-once (photo=null in update).
+                # Check ttl_seconds if present, or treat None media_obj on a
+                # visual type as potentially view-once and let _auto_preserve decide.
                 is_view_once = bool(getattr(media_obj, 'ttl_seconds', None))
+                if not is_view_once and media_obj is None and media_type in ('photo', 'video', 'voice', 'video_note'):
+                    is_view_once = True  # treat as potentially view-once; _auto_preserve will confirm
             if not is_protected and not is_view_once:
                 return
             await _auto_preserve(c, m, session_key)
         except Exception as e:
             logger.error(f"Auto-preserve outgoing error: {e}")
+
+    @client.on_raw_update()
+    async def _raw_preserve_handler(c, update, users, chats):
+        """Raw-level safety net for view-once media.
+
+        Pyrogram's on_message can silently miss view-once photos where Telegram
+        sends MessageMediaPhoto with photo=null (flags.0 unset) but ttl_seconds
+        set.  At the raw MTProto level we can still see ttl_seconds, and we
+        trigger a server-side get_messages() fetch before the file expires.
+
+        Flow:
+          1. Check if update is UpdateNewMessage / UpdateNewChannelMessage
+          2. Check if the raw media has ttl_seconds but the photo/document is absent
+          3. Sleep briefly so on_message fires first (it handles the normal case)
+          4. If still not preserved, fetch full message and call _auto_preserve
+        """
+        from pyrogram import raw as _raw
+        try:
+            if not isinstance(update, (_raw.types.UpdateNewMessage,
+                                        _raw.types.UpdateNewChannelMessage)):
+                return
+
+            raw_msg = update.message
+            if not isinstance(raw_msg, _raw.types.Message):
+                return
+            if not raw_msg.media:
+                return
+
+            media      = raw_msg.media
+            ttl_seconds = getattr(media, 'ttl_seconds', None)
+            if not ttl_seconds:
+                return  # not a TTL / view-once message — ignore
+
+            # If the raw media has a non-null photo or document, on_message
+            # already has a valid media_obj and will handle it via _auto_preserve.
+            # We only need to intervene when photo/document is absent (photo=null case).
+            has_content = bool(
+                getattr(media, 'photo', None) or getattr(media, 'document', None)
+            )
+            if has_content:
+                return  # on_message has the full object; nothing to do here
+
+            # Derive integer chat_id from the raw peer
+            peer = getattr(raw_msg, 'peer_id', None)
+            if peer is None:
+                return
+            if hasattr(peer, 'channel_id'):
+                chat_id = int(f"-100{peer.channel_id}")
+            elif hasattr(peer, 'chat_id'):
+                chat_id = -peer.chat_id
+            elif hasattr(peer, 'user_id'):
+                chat_id = peer.user_id
+            else:
+                return
+
+            msg_id = raw_msg.id
+            logger.info(f"[raw_preserve] detected view-once with photo=null "
+                        f"msg={msg_id} chat={chat_id} ttl={ttl_seconds}")
+
+            # Bounded retry: poll the DB for up to 4 s in 0.5 s intervals to give
+            # on_message time to fire first (it handles the normal path).  If it
+            # hasn't preserved by then, we take over.
+            already_saved = False
+            for _attempt in range(8):           # 8 × 0.5 s = 4 s total
+                await asyncio.sleep(0.5)
+                with app.app_context():
+                    already_saved = bool(PreservedMedia.query.filter_by(
+                        session_key=session_key,
+                        chat_id=chat_id,
+                        message_id=msg_id,
+                    ).first())
+                if already_saved:
+                    logger.debug(f"[raw_preserve] msg {msg_id} preserved by on_message after "
+                                 f"{(_attempt+1)*0.5:.1f}s")
+                    break
+
+            if already_saved:
+                return
+
+            # Not preserved yet — fetch full message from Telegram's server.
+            # The file is still accessible because no client has called
+            # readMessageContents yet (we never call it).
+            try:
+                full_msg = await asyncio.wait_for(
+                    c.get_messages(chat_id, msg_id),
+                    timeout=20
+                )
+                if full_msg and full_msg.media:
+                    logger.info(f"[raw_preserve] fetched full msg {msg_id} — calling _auto_preserve")
+                    await _auto_preserve(c, full_msg, session_key)
+                else:
+                    logger.warning(f"[raw_preserve] get_messages returned empty for msg {msg_id} "
+                                   f"— server may have already expired the view-once media")
+            except Exception as fe:
+                logger.warning(f"[raw_preserve] get_messages failed for msg {msg_id}: {fe}")
+
+        except Exception as e:
+            logger.debug(f"[raw_preserve] handler error: {e}")
 
     @client.on_deleted_messages()
     async def on_deleted(c, messages):
@@ -1154,34 +1387,41 @@ def _build_msg_dict(msg):
     sender_name, sender_key, sender_username = _extract_sender(msg) if not msg.outgoing else (None, None, None)
 
     preview_kind = media_type if media_type in PREVIEW_KINDS else None
-    mime_type = None
+    mime_type    = None
+    is_view_once = False
+    ttl_seconds  = None
 
     m = {
-        "id": msg.id,
-        "date": msg.date.isoformat() if msg.date else None,
-        "text": msg.text or msg.caption or "",
-        "is_outgoing": msg.outgoing,
-        "has_media": downloadable,
-        "media_type": media_type,
+        "id":           msg.id,
+        "date":         msg.date.isoformat() if msg.date else None,
+        "text":         msg.text or msg.caption or "",
+        "is_outgoing":  msg.outgoing,
+        "has_media":    downloadable,
+        "media_type":   media_type,
         "preview_kind": preview_kind,
         "forward_from": _extract_forward(msg),
-        "sender_name": sender_name,
-        "sender_key": sender_key,
+        "sender_name":  sender_name,
+        "sender_key":   sender_key,
         "sender_username": sender_username,
     }
     if downloadable:
         try:
             obj = getattr(msg, media_type)
-            if hasattr(obj, 'file_size') and obj.file_size:
-                m["file_size"] = format_file_size(obj.file_size)
-            if hasattr(obj, 'file_name') and obj.file_name:
-                m["file_name"] = obj.file_name
-            if hasattr(obj, 'duration') and obj.duration:
-                m["duration"] = obj.duration
-            mime_type = getattr(obj, 'mime_type', None)
+            if obj:
+                if hasattr(obj, 'file_size') and obj.file_size:
+                    m["file_size"] = format_file_size(obj.file_size)
+                if hasattr(obj, 'file_name') and obj.file_name:
+                    m["file_name"] = obj.file_name
+                if hasattr(obj, 'duration') and obj.duration:
+                    m["duration"] = obj.duration
+                mime_type   = getattr(obj, 'mime_type', None)
+                ttl_seconds = getattr(obj, 'ttl_seconds', None)
+                is_view_once = bool(ttl_seconds)
         except Exception:
             pass
-    m["mime_type"] = mime_type
+    m["mime_type"]    = mime_type
+    m["is_view_once"] = is_view_once
+    m["ttl_seconds"]  = ttl_seconds
     return m
 
 async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0, query=None, media_only=False):
