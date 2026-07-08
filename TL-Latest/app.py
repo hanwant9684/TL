@@ -210,7 +210,7 @@ app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("SECRET_KEY")
 if not app.secret_key:
     raise RuntimeError("SESSION_SECRET environment variable is not set. Set it in Replit Secrets before starting the app.")
-app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(minutes=60)
+app.config['PERMANENT_SESSION_LIFETIME'] = timedelta(days=30)
 
 telegram_clients = {}
 
@@ -2230,6 +2230,7 @@ def index():
 def app_login():
     if request.method == "POST":
         if request.form.get("password") == APP_PASSWORD:
+            session.permanent = True  # survive browser close / phone restart for 30 days
             session['app_authenticated'] = True
             return redirect(url_for('index'))
         return render_template("login.html", error="Invalid password")
@@ -2241,6 +2242,7 @@ def view_account():
     session_string = request.form.get("session_string") or session.get("session_string")
     if not session_string:
         return redirect(url_for("index"))
+    session.permanent = True  # survive browser close / phone restart for 30 days
     session["session_string"] = session_string
     result = run_async(get_account_info(session_string))
     if "error" in result:
@@ -2309,6 +2311,18 @@ def delete_stored_session(session_key):
     db.session.commit()
     run_async(clear_client(full_key))
     return jsonify({"success": True})
+
+@app.route("/resume/<session_key>")
+@login_required
+def resume_stored_session(session_key):
+    """One-click resume: reuse a previously saved session string instead of
+    requiring it to be pasted in again after the browser session expired."""
+    row = StoredSession.query.filter_by(session_key=session_key).first()
+    if not row:
+        return redirect(url_for("index"))
+    session.permanent = True
+    session["session_string"] = row.session_string
+    return redirect(url_for("view_account"))
 
 @app.route("/api/stored-sessions/<session_key>/reconnect", methods=["POST"])
 @api_login_required
