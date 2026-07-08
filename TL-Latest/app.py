@@ -564,13 +564,11 @@ threading.Thread(target=_loop.run_forever, daemon=True).start()
 def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, _loop).result()
 
-# ── Startup: restore download queue from DB (no Telegram reconnect) ────────────
+# ── Startup: restore download queue + auto-reconnect saved Telegram sessions ──
 
 def _startup_restore():
     """On app start, restore the in-memory download_queue from the DB so
-    previously queued/completed downloads are visible again after a redeploy.
-    Telegram sessions are NOT auto-reconnected — they connect only when the
-    user opens the app and selects a session."""
+    previously queued/completed downloads are visible again after a redeploy."""
     with app.app_context():
         # DB may still be finishing its own boot/recovery right when this
         # thread starts; retry a few times instead of silently giving up.
@@ -601,6 +599,54 @@ def _startup_restore():
         logger.info(f"[startup] Restored {len(download_queue)} download record(s) from DB.")
 
 threading.Thread(target=_startup_restore, daemon=True).start()
+
+def _startup_reconnect_sessions():
+    """Auto-reconnect every saved Telegram session on process start, so
+    message logging / view-once & protected-chat capture run continuously
+    on the server — with no browser tab, cookie, or manual click required.
+
+    Runs in the background dedicated event loop (_loop) since Pyrogram
+    clients must be started from an async context.
+    """
+    with app.app_context():
+        rows = None
+        for attempt in range(1, 6):
+            try:
+                rows = StoredSession.query.all()
+                break
+            except Exception as e:
+                db.session.rollback()
+                if attempt == 5:
+                    logger.warning(f"[startup] Giving up auto-reconnecting sessions after {attempt} attempts: {e}")
+                    return
+                delay = 1.5 * attempt
+                logger.warning(f"[startup] DB not ready for session reconnect (attempt {attempt}/5): {e}. Retrying in {delay:.1f}s...")
+                time.sleep(delay)
+
+        for row in rows or []:
+            try:
+                run_async(get_client(row.session_string))
+                row.reconnect_failed = False
+                row.last_seen = datetime.utcnow()
+                db.session.commit()
+                logger.info(f"[startup] Auto-reconnected saved session '{row.label}'")
+            except Exception as e:
+                db.session.rollback()
+                err = str(e)
+                if any(k in err.upper() for k in (
+                    "AUTH_KEY_DUPLICATED", "SESSION_REVOKED", "SESSION_EXPIRED",
+                    "AUTH_KEY_INVALID", "USER_DEACTIVATED"
+                )):
+                    try:
+                        row.reconnect_failed = True
+                        db.session.commit()
+                    except Exception:
+                        db.session.rollback()
+                logger.warning(f"[startup] Auto-reconnect failed for '{row.label}': {e}")
+
+# Delay slightly so _startup_restore's DB retries aren't racing this thread
+# for the same connection pool right at cold start.
+threading.Timer(3.0, lambda: threading.Thread(target=_startup_reconnect_sessions, daemon=True).start()).start()
 
 # ── General-purpose TTL cache (dialogs, messages, account info) ───────────────
 
