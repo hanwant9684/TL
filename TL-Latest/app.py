@@ -1354,13 +1354,31 @@ async def get_account_info(session_string):
 DOWNLOADABLE_MEDIA = {"photo", "video", "document", "audio", "voice", "animation", "video_note", "sticker"}
 
 def _extract_forward(msg):
-    if msg.forward_from:
-        name = f"{msg.forward_from.first_name or ''} {msg.forward_from.last_name or ''}".strip()
+    # Use the non-deprecated forward_origin API (Pyrofork ≥ 2.x).
+    # Falls back gracefully to None if origin is absent.
+    origin = getattr(msg, 'forward_origin', None)
+    if origin is None:
+        return None
+    # MessageOriginUser — forwarded from a visible user
+    sender_user = getattr(origin, 'sender_user', None)
+    if sender_user:
+        name = (
+            f"{getattr(sender_user, 'first_name', '') or ''} "
+            f"{getattr(sender_user, 'last_name', '') or ''}"
+        ).strip()
         return name or "Unknown"
-    if msg.forward_from_chat:
-        return msg.forward_from_chat.title or msg.forward_from_chat.first_name or "Unknown"
-    if getattr(msg, 'forward_sender_name', None):
-        return msg.forward_sender_name
+    # MessageOriginChannel (has .chat) or MessageOriginChat (has .sender_chat)
+    sender_chat = getattr(origin, 'sender_chat', None) or getattr(origin, 'chat', None)
+    if sender_chat:
+        return (
+            getattr(sender_chat, 'title', None)
+            or getattr(sender_chat, 'first_name', None)
+            or "Unknown"
+        )
+    # MessageOriginHiddenUser — privacy-protected sender name
+    sender_user_name = getattr(origin, 'sender_user_name', None)
+    if sender_user_name:
+        return sender_user_name
     return None
 
 def _extract_sender(msg):
