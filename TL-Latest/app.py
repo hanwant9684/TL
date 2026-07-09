@@ -1493,19 +1493,37 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                     return {"error": f"Could not search messages: {e}"}
             elif media_only:
                 count = 0
+                # Walk backwards in batches of 200 until we have `limit` media
+                # items or exhaust history.  A single 200-message window is
+                # almost never enough in chatty groups where media is sparse.
+                _MEDIA_BATCH = 200
+                cur_offset = offset_id if offset_id > 0 else 0
                 try:
-                    # Scan in windows of 200 to avoid a single 1500-message Telegram
-                    # request — large scans trigger FloodWait on busy accounts.
-                    async for msg in client.get_chat_history(chat_id, limit=200, offset_id=offset_id if offset_id > 0 else 0):
-                        if not msg.media:
-                            continue
-                        if (msg.media.value if msg.media else None) not in DOWNLOADABLE_MEDIA:
-                            continue
-                        messages.append(_build_msg_dict(msg))
-                        count += 1
+                    while count < limit:
+                        batch_seen = 0
+                        last_id = None
+                        async for msg in client.get_chat_history(
+                            chat_id, limit=_MEDIA_BATCH, offset_id=cur_offset
+                        ):
+                            batch_seen += 1
+                            last_id = msg.id
+                            if not msg.media:
+                                continue
+                            if (msg.media.value if msg.media else None) not in DOWNLOADABLE_MEDIA:
+                                continue
+                            messages.append(_build_msg_dict(msg))
+                            count += 1
+                            if count >= limit:
+                                has_more = True
+                                break
+
                         if count >= limit:
-                            has_more = True
-                            break
+                            break  # done — hit the page limit
+                        if batch_seen < _MEDIA_BATCH or last_id is None:
+                            has_more = False  # short batch → end of history
+                            break  # reached start of history
+                        # Advance the offset to continue from where we left off
+                        cur_offset = last_id
                 except Exception as e:
                     if _is_peer_invalid(e) and not _resynced:
                         logger.warning(f"get_chat_history (media) PEER_ID_INVALID for {chat_id} — resyncing dialogs and retrying")
@@ -1598,6 +1616,20 @@ def media_thumb(chat_id, message_id):
 
                 if media_type == "photo":
                     obj = msg.photo
+                    if obj is None:
+                        # View-once photo (photo=null in update): try to serve
+                        # the preserved copy from DB if we saved it earlier.
+                        sk = session_str[:16] if session_str else None
+                        if sk:
+                            with app.app_context():
+                                pm = PreservedMedia.query.filter_by(
+                                    session_key=sk,
+                                    chat_id=peer_id,
+                                    message_id=int(message_id),
+                                ).first()
+                                if pm and pm.file_data:
+                                    return pm.file_data, "image/jpeg", None
+                        return None, None, "NO_MEDIA"
                     thumbs = getattr(obj, "thumbs", None)
                     if thumbs:
                         # Pick a small/medium-res thumb instead of the full photo
@@ -1692,7 +1724,12 @@ def media_thumb(chat_id, message_id):
     except Exception as e:
         fut.set_exception(e)
         err = str(e)
-        logger.error(f"media-thumb error: {err}")
+        # "doesn't contain any downloadable media" = expected for view-once
+        # messages where photo=null; not a real error, demote to debug.
+        if "doesn't contain any downloadable media" in err:
+            logger.debug(f"media-thumb no-media (view-once or expired): {err}")
+        else:
+            logger.error(f"media-thumb error: {err}")
         if "FLOOD" in err or "Too Many" in err.lower():
             return jsonify({"error": "Rate limited", "code": "RATE_LIMITED", "retryable": True}), 429
         if any(k in err.upper() for k in ("AUTH", "SESSION", "UNAUTHORIZED")):
@@ -2575,7 +2612,8 @@ def view_account():
             session_key=session_string[:16]).all()]
     except Exception:
         protected_ids = []
-    return render_template("account.html", account=result, protected_chats=protected_ids)
+    return render_template("account.html", account=result, protected_chats=protected_ids,
+                           session_key=session_string[:16])
 
 @app.route("/api/stored-sessions", methods=["GET"])
 @api_login_required

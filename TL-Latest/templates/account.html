@@ -316,7 +316,10 @@
             <button class="icon-btn" title="Active Sessions" onclick="openSessions()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>
             </button>
-            <a href="/logout" class="icon-btn" title="Logout">
+            <button class="icon-btn" title="Disconnect session (removes from DB — lets you reuse this session string on another machine)" onclick="disconnectSession('{{ session_key }}')" style="color:#e07070;">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64A9 9 0 1 1 5.64 19.36"/><path d="M9 3H5a2 2 0 0 0-2 2v4"/><polyline points="3 7 9 1 15 7"/></svg>
+            </button>
+            <a href="/logout" class="icon-btn" title="Logout (keeps session in DB)">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 21H5a2 2 0 01-2-2V5a2 2 0 012-2h4"/><polyline points="16 17 21 12 16 7"/><line x1="21" y1="12" x2="9" y2="12"/></svg>
             </a>
         </div>
@@ -1947,6 +1950,25 @@ function closeDropdown() {
 document.addEventListener('click', e => {
     if (!document.getElementById('more-dropdown').contains(e.target)) closeDropdown();
 });
+
+// ── Disconnect session ──
+async function disconnectSession(sk) {
+    if (!confirm('Disconnect and delete this session from the database?\n\nThis stops the background listener so you can reuse the same session string on another machine without duplicate-session conflicts.\n\nYou will be logged out.')) return;
+    try {
+        const r = await fetch('/api/stored-sessions/' + sk, { method: 'DELETE' });
+        if (r.ok) {
+            window.location.href = '/logout';
+        } else if (r.status === 401) {
+            handleAuthExpired();
+        } else {
+            let msg = 'Unknown error';
+            try { const d = await r.json(); msg = d.error || msg; } catch {}
+            alert('Error: ' + msg);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
 
 // ── Sessions ──
 async function openSessions() {
