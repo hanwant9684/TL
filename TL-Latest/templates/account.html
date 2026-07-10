@@ -320,12 +320,6 @@
             <button class="icon-btn" title="Active Sessions" onclick="openSessions()">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M9 7h6M9 11h6M9 15h4"/></svg>
             </button>
-            <button class="icon-btn" title="Mute ALL chats forever" onclick="muteAllChats()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><line x1="23" y1="9" x2="17" y2="15"/><line x1="17" y1="9" x2="23" y2="15"/></svg>
-            </button>
-            <button class="icon-btn" title="Unmute ALL chats" onclick="unmuteAllChats()">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14"/></svg>
-            </button>
             <button class="icon-btn" title="Disconnect session (removes from DB — lets you reuse this session string on another machine)" onclick="disconnectSession('{{ session_key }}')" style="color:#e07070;">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18.36 6.64A9 9 0 1 1 5.64 19.36"/><path d="M9 3H5a2 2 0 0 0-2 2v4"/><polyline points="3 7 9 1 15 7"/></svg>
             </button>
@@ -386,6 +380,9 @@
                             <a onclick="deselectAll()">Deselect All</a>
                             <a onclick="toggleRangeSelect()" id="range-btn">Enable Range Select</a>
                             <a onclick="viewDeletedMessages()">View Deleted</a>
+                            <hr style="border:none;border-top:1px solid var(--border);margin:4px 0;">
+                            <a onclick="muteCurrentChat();closeDropdown()">🔇 Mute this chat</a>
+                            <a onclick="unmuteCurrentChat();closeDropdown()">🔔 Unmute this chat</a>
                             <hr style="border:none;border-top:1px solid var(--border);margin:4px 0;">
                             <a onclick="toggleTray();closeDropdown()">📥 My Downloads</a>
                             <a onclick="openPreserved()">🛡 Preserved Media</a>
@@ -844,35 +841,34 @@ function closeChat() {
     currentChatId = null;
 }
 
-async function muteAllChats() {
-    if (!confirm('Mute notifications for ALL chats, groups and channels forever?\n\nThis changes your real Telegram notification settings on this account.')) return;
-    showToast('Muting all chats… this may take a moment');
+async function muteCurrentChat() {
+    if (!currentChatId) return;
+    if (!confirm('Mute notifications for this chat forever?\n\nThis changes your real Telegram notification settings on this account.')) return;
     try {
-        const r = await fetch('/api/mute-all-chats', { method: 'POST' });
+        const r = await fetch(`/api/mute-chat/${currentChatId}`, { method: 'POST' });
         const d = await r.json();
         if (!r.ok || d.error) {
-            showToast(d.error || 'Failed to mute chats', 'error');
+            showToast(d.error || 'Failed to mute chat', 'error');
         } else {
-            showToast(`Muted ${d.muted} chat(s)${d.failed ? `, ${d.failed} failed` : ''}`, 'success');
+            showToast('Chat muted', 'success');
         }
     } catch (e) {
-        showToast('Failed to mute chats', 'error');
+        showToast('Failed to mute chat', 'error');
     }
 }
 
-async function unmuteAllChats() {
-    if (!confirm('Unmute ALL chats, groups and channels?\n\nThis changes your real Telegram notification settings on this account.')) return;
-    showToast('Unmuting all chats… this may take a moment');
+async function unmuteCurrentChat() {
+    if (!currentChatId) return;
     try {
-        const r = await fetch('/api/unmute-all-chats', { method: 'POST' });
+        const r = await fetch(`/api/unmute-chat/${currentChatId}`, { method: 'POST' });
         const d = await r.json();
         if (!r.ok || d.error) {
-            showToast(d.error || 'Failed to unmute chats', 'error');
+            showToast(d.error || 'Failed to unmute chat', 'error');
         } else {
-            showToast(`Unmuted ${d.unmuted} chat(s)${d.failed ? `, ${d.failed} failed` : ''}`, 'success');
+            showToast('Chat unmuted', 'success');
         }
     } catch (e) {
-        showToast('Failed to unmute chats', 'error');
+        showToast('Failed to unmute chat', 'error');
     }
 }
 

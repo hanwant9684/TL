@@ -2385,91 +2385,72 @@ def send_message_route():
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
 _MUTE_FOREVER = 2**31 - 1  # Telegram apps' convention for "mute forever"
-_bulk_notify_lock = threading.Lock()
-_bulk_notify_inflight = set()  # session_keys currently running a mute/unmute-all
 
-async def _set_notify_for_all_dialogs(client, mute_until):
-    """Apply mute_until to every dialog. Handles FloodWait per-chat (sleep the
-    exact wait + retry, up to 3 tries) instead of counting it as a failure, and
-    paces requests slightly to avoid triggering flood control on large accounts."""
-    ok, failed, floodwaited = 0, 0, 0
-    async for dialog in client.get_dialogs():
-        for attempt in range(4):
-            try:
-                peer = await client.resolve_peer(dialog.chat.id)
-                await client.invoke(_raw_functions.account.UpdateNotifySettings(
-                    peer=_raw_types.InputNotifyPeer(peer=peer),
-                    settings=_raw_types.InputPeerNotifySettings(mute_until=mute_until)
-                ))
-                ok += 1
-                break
-            except Exception as e:
-                if _FloodWait and isinstance(e, _FloodWait):
-                    if attempt >= 3:
-                        failed += 1
-                        break
-                    floodwaited += 1
-                    await asyncio.sleep(max(getattr(e, 'value', 5), 1) + random.uniform(0.5, 1.5))
-                    continue
-                failed += 1
-                logger.warning(f"bulk-notify: failed for chat {dialog.chat.id}: {e}")
-                break
-        await asyncio.sleep(0.05)  # small pacing to avoid tripping flood control
-    return {"success": True, "updated": ok, "failed": failed, "floodwaited": floodwaited}
+async def _set_notify_for_chat(client, chat_id, mute_until):
+    """Apply mute_until to a single chat. Handles FloodWait (sleep the exact
+    wait + retry, up to 3 tries) instead of failing immediately."""
+    last_err = None
+    for attempt in range(4):
+        try:
+            peer = await client.resolve_peer(chat_id)
+            await client.invoke(_raw_functions.account.UpdateNotifySettings(
+                peer=_raw_types.InputNotifyPeer(peer=peer),
+                settings=_raw_types.InputPeerNotifySettings(mute_until=mute_until)
+            ))
+            return
+        except Exception as e:
+            last_err = e
+            if _FloodWait and isinstance(e, _FloodWait):
+                if attempt >= 3:
+                    break
+                await asyncio.sleep(max(getattr(e, 'value', 5), 1) + random.uniform(0.5, 1.5))
+                continue
+            break
+    raise last_err
 
-@app.route("/api/mute-all-chats", methods=["POST"])
+@app.route("/api/mute-chat/<chat_id>", methods=["POST"])
 @api_login_required
-def mute_all_chats_route():
-    """Mute notifications for every chat/group/channel forever."""
+def mute_chat_route(chat_id):
+    """Mute notifications for a single chat/group/channel forever."""
     session_str = session.get("session_string")
     if not session_str:
         return jsonify({"error": "No session", "code": "BAD_REQUEST"}), 400
-    sk = session_str[:16]
-    with _bulk_notify_lock:
-        if sk in _bulk_notify_inflight:
-            return jsonify({"error": "A mute/unmute-all is already running for this account", "code": "IN_PROGRESS"}), 409
-        _bulk_notify_inflight.add(sk)
+    try:
+        cid = int(chat_id)
+    except ValueError:
+        return jsonify({"error": "Invalid chat_id", "code": "BAD_REQUEST"}), 400
     try:
         async def task():
             async def _do(client):
-                return await _set_notify_for_all_dialogs(client, _MUTE_FOREVER)
+                await _set_notify_for_chat(client, cid, _MUTE_FOREVER)
             return await run_with_reconnect(session_str, _do)
-        result = run_async(task())
-        result["muted"] = result.pop("updated")
-        return jsonify(result)
+        run_async(task())
+        return jsonify({"success": True})
     except Exception as e:
-        logger.error(f"mute_all_chats error: {e}")
+        logger.error(f"mute_chat error: {e}")
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
-    finally:
-        with _bulk_notify_lock:
-            _bulk_notify_inflight.discard(sk)
 
-@app.route("/api/unmute-all-chats", methods=["POST"])
+@app.route("/api/unmute-chat/<chat_id>", methods=["POST"])
 @api_login_required
-def unmute_all_chats_route():
-    """Clear the mute setting (mute_until=0) for every chat/group/channel."""
+def unmute_chat_route(chat_id):
+    """Clear the mute setting (mute_until=0) for a single chat/group/channel."""
     session_str = session.get("session_string")
     if not session_str:
         return jsonify({"error": "No session", "code": "BAD_REQUEST"}), 400
-    sk = session_str[:16]
-    with _bulk_notify_lock:
-        if sk in _bulk_notify_inflight:
-            return jsonify({"error": "A mute/unmute-all is already running for this account", "code": "IN_PROGRESS"}), 409
-        _bulk_notify_inflight.add(sk)
+    try:
+        cid = int(chat_id)
+    except ValueError:
+        return jsonify({"error": "Invalid chat_id", "code": "BAD_REQUEST"}), 400
     try:
         async def task():
             async def _do(client):
-                return await _set_notify_for_all_dialogs(client, 0)
+                await _set_notify_for_chat(client, cid, 0)
             return await run_with_reconnect(session_str, _do)
-        result = run_async(task())
-        result["unmuted"] = result.pop("updated")
-        return jsonify(result)
+        run_async(task())
+        return jsonify({"success": True})
     except Exception as e:
-        logger.error(f"unmute_all_chats error: {e}")
+        logger.error(f"unmute_chat error: {e}")
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
-    finally:
-        with _bulk_notify_lock:
-            _bulk_notify_inflight.discard(sk)
 
 @app.route("/download/<chat_id>/<message_id>")
 @login_required
