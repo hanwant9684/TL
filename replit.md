@@ -1,43 +1,19 @@
-# Telegram Viewer
+# Telegram Viewer (TL-Latest)
 
-A Flask + Pyrogram web app that lets you browse your Telegram chats through a browser-based UI. Supports message translation (via Groq/Gemini AI) and chat export.
-
-## How to run
-
-The app starts automatically via the **Start application** workflow:
-
-```
-cd TL-Latest && python app.py
-```
-
-It binds to `0.0.0.0:5000`. The preview pane shows the login screen.
-
-## Required secrets (set in Replit Secrets)
-
-| Secret | Purpose |
-|---|---|
-| `API_ID` | Telegram API ID from https://my.telegram.org |
-| `API_HASH` | Telegram API hash from https://my.telegram.org |
-| `APP_PASSWORD` | Password to protect the web UI |
-| `SESSION_SECRET` | Flask session signing key |
-
-## Optional secrets
-
-| Secret | Purpose |
-|---|---|
-| `GROQ_API_KEY` | AI translation via Groq (llama-3.1-8b-instant) |
-| `GEMINI_API_KEY` | AI translation via Gemini (fallback) |
-| `DATABASE_URL` | PostgreSQL URL; defaults to SQLite (`app.db`) if unset |
+## Overview
+Imported from GitHub. A Flask + Pyrogram (pyrofork) web app for viewing/exporting Telegram messages, originally built for VPS deployment (see `deploy/` for the original systemd/nginx setup). Now running on Replit.
 
 ## Stack
+- Python 3 / Flask, Flask-SQLAlchemy
+- Pyrogram (`pyrofork`) for Telegram MTProto access
+- SQLite by default (`app.db`); set `DATABASE_URL` to use Postgres instead
+- Optional AI-assisted translation: Groq / Gemini API keys, falls back to unofficial Google Translate if unset
 
-- **Flask** — web framework
-- **Pyrogram** — Telegram MTProto client
-- **Flask-SQLAlchemy** — ORM (SQLite by default, PostgreSQL optional)
-- **gunicorn** — WSGI server (used in production/deployment)
-
-## Deployment
-
-The `deploy/` folder contains a VPS deployment guide, nginx config, and systemd unit. For Replit deployment, use the configured VM deployment target with gunicorn.
+## Running on Replit
+- Workflow: `Start application` runs `python app.py`, serving on port 5000 (`0.0.0.0`).
+- Required secrets (already configured): `SESSION_SECRET`, `API_ID`, `API_HASH`, `APP_PASSWORD`.
+- Optional secrets: `GROQ_API_KEY`, `GEMINI_API_KEY` (better translation quality), `DATABASE_URL` (use Postgres instead of SQLite), `PROXY_*` (outbound proxy for Telegram connections).
+- The app gates access behind the `APP_PASSWORD` login screen shown at `/`.
 
 ## User preferences
+None recorded yet.
