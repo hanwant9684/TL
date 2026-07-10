@@ -1289,7 +1289,7 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
                 "unread_count": dialog.unread_messages_count,
                 "is_channel": dialog.chat.type.value == "channel",
                 "is_group": dialog.chat.type.value in ["group", "supergroup"],
-                "can_manage": dialog.chat.type.value in ["channel", "group", "supergroup"],
+                "can_manage": True,
                 "username": getattr(dialog.chat, "username", None) or "",
             })
 
@@ -1502,10 +1502,7 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
                     (getattr(chat, "title", None) or getattr(chat, "first_name", None))
                     if chat else None
                 ) or "Chat"
-                can_manage = (
-                    getattr(chat.type, "value", "") in ["channel", "group", "supergroup"]
-                    if chat else False
-                )
+                can_manage = True
                 with _chat_info_lock:
                     _chat_info_cache[ck] = {
                         "name": chat_name,
