@@ -587,6 +587,26 @@ async def _auto_preserve(client, msg, session_key):
                 pass
 
 
+def _log_message_sync(message_id, chat_id, user_id, text, date):
+    """Runs off the shared asyncio event loop (see log_message below) so a
+    busy account's message volume can never block other sessions' requests."""
+    with app.app_context():
+        try:
+            db.session.add(MessageStore(
+                message_id=message_id,
+                chat_id=chat_id,
+                user_id=user_id,
+                text=text,
+                date=date
+            ))
+            db.session.commit()
+        except Exception as e:
+            logger.error(f"Error logging message: {e}")
+            db.session.rollback()
+        finally:
+            db.session.remove()
+
+
 def create_telegram_client(session_string):
     session_key = session_string[:16]
     client = Client(
@@ -601,15 +621,16 @@ def create_telegram_client(session_string):
     @client.on_message()
     async def log_message(c, m):
         try:
-            with app.app_context():
-                db.session.add(MessageStore(
-                    message_id=m.id,
-                    chat_id=m.chat.id,
-                    user_id=m.from_user.id if m.from_user else None,
-                    text=m.text or m.caption or "",
-                    date=m.date
-                ))
-                db.session.commit()
+            # The DB write is synchronous (blocking) I/O, but this handler runs
+            # on the single shared asyncio event loop used by EVERY logged-in
+            # Telegram session (see `_loop` / run_async). Running it inline used
+            # to stall that one shared loop on every incoming message — on a
+            # busy account (lots of traffic), that starved page-load requests
+            # for ALL sessions, not just this one, causing the UI to hang.
+            # Offload it to a worker thread so the event loop stays free.
+            await asyncio.to_thread(_log_message_sync, m.id, m.chat.id,
+                                     m.from_user.id if m.from_user else None,
+                                     m.text or m.caption or "", m.date)
         except Exception as e:
             logger.error(f"Error logging message: {e}")
         # Invalidate caches so new messages appear immediately.
