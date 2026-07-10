@@ -2353,6 +2353,36 @@ def delete_messages():
         logger.error(f"delete_messages error: {e}")
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
+@app.route("/send-message", methods=["POST"])
+@api_login_required
+def send_message_route():
+    """Send a text message into a chat/group/bot using the logged-in account's
+    real Telegram identity — same effect as sending it from the Telegram app."""
+    data = request.json or {}
+    chat_id = data.get("chat_id")
+    text = (data.get("text") or "").strip()
+    session_str = session.get("session_string")
+    if not chat_id or not text or not session_str:
+        return jsonify({"error": "Missing params", "code": "BAD_REQUEST"}), 400
+    if len(text) > 4096:
+        return jsonify({"error": "Message too long", "code": "BAD_REQUEST"}), 400
+
+    async def task():
+        async def _do(client):
+            try:
+                peer_id = int(chat_id)
+            except Exception:
+                peer_id = chat_id
+            msg = await client.send_message(peer_id, text)
+            return {"success": True, "message_id": msg.id, "date": msg.date.isoformat() if msg.date else None}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"send_message error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
 @app.route("/download/<chat_id>/<message_id>")
 @login_required
 def download_media_route(chat_id, message_id):

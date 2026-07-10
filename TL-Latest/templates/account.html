@@ -115,6 +115,10 @@
 
         /* Messages */
         .chat-messages{flex:1;overflow-y:auto;min-height:0;padding:12px 16px;display:flex;flex-direction:column;scrollbar-width:thin;scrollbar-color:var(--bg-hover) transparent;}
+        .chat-composer{flex-shrink:0;display:flex;align-items:flex-end;gap:8px;padding:10px 16px;border-top:1px solid var(--border);background:var(--bg-header);}
+        .chat-composer textarea{flex:1;resize:none;max-height:120px;min-height:20px;border-radius:18px;border:1px solid var(--border);background:var(--bg-hover);color:var(--text);padding:9px 14px;font:inherit;font-size:0.9rem;outline:none;}
+        .chat-composer textarea:focus{border-color:var(--accent,#4a9eff);}
+        #composer-send-btn{border-radius:50%;width:36px;height:36px;padding:0;display:flex;align-items:center;justify-content:center;flex-shrink:0;}
         .chat-messages::-webkit-scrollbar{width:4px;}
         .chat-messages::-webkit-scrollbar-thumb{background:var(--bg-hover);border-radius:2px;}
         .messages-inner{display:flex;flex-direction:column;gap:2px;}
@@ -471,6 +475,12 @@
             <div class="chat-messages" id="chat-messages">
                 <div class="messages-inner" id="messages-inner"></div>
             </div>
+            <div class="chat-composer" id="chat-composer" style="display:none;">
+                <textarea id="composer-input" placeholder="Message..." rows="1"
+                          onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendComposerMessage();}"
+                          oninput="this.style.height='auto';this.style.height=Math.min(this.scrollHeight,120)+'px';"></textarea>
+                <button id="composer-send-btn" class="tb-btn" onclick="sendComposerMessage()" title="Send">➤</button>
+            </div>
         </div>
     </div>
 </div>
@@ -808,6 +818,7 @@ async function openChat(chatId, chatName, canManage, el) {
     document.getElementById('chat-header-id').textContent = 'ID: ' + chatId;
     document.getElementById('empty-state').style.display = 'none';
     document.getElementById('chat-panel').classList.add('visible');
+    document.getElementById('chat-composer').style.display = 'flex';
 
     _updateProtectBtn(chatId);
 
@@ -823,7 +834,38 @@ function closeChat() {
     document.getElementById('sidebar').classList.remove('hidden');
     document.getElementById('chat-panel').classList.remove('visible');
     document.getElementById('empty-state').style.display = 'flex';
+    document.getElementById('chat-composer').style.display = 'none';
     currentChatId = null;
+}
+
+let _sendingMsg = false;
+async function sendComposerMessage() {
+    const input = document.getElementById('composer-input');
+    const text = input.value.trim();
+    if (!text || !currentChatId || _sendingMsg) return;
+    _sendingMsg = true;
+    const btn = document.getElementById('composer-send-btn');
+    btn.disabled = true;
+    try {
+        const r = await fetch('/send-message', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ chat_id: currentChatId, text })
+        });
+        const d = await r.json();
+        if (!r.ok || d.error) {
+            showToast(d.error || 'Failed to send message', 'error');
+        } else {
+            input.value = '';
+            input.style.height = 'auto';
+            await loadMessages(true);
+        }
+    } catch (e) {
+        showToast('Failed to send message', 'error');
+    } finally {
+        _sendingMsg = false;
+        btn.disabled = false;
+    }
 }
 
 // ── Load Messages ──
