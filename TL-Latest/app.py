@@ -757,7 +757,16 @@ def create_telegram_client(session_string):
         api_id=API_ID,
         api_hash=API_HASH,
         proxy=get_proxy_config(),
-        in_memory=True
+        in_memory=True,
+        # sleep_threshold=0 makes Pyrogram raise FloodWait immediately instead
+        # of silently sleeping-and-retrying inside its own session layer. Its
+        # default (auto-retry for waits under ~10-30s) hides the error from us
+        # entirely — a stuck call keeps retrying forever with no timeout, no
+        # log we control, and no way for a feature flag or cancellation to
+        # reach it. Raising immediately lets our own bounded, jittered retry
+        # in run_with_reconnect() (and the timeouts on other call sites)
+        # actually be the one place flood handling happens.
+        sleep_threshold=0,
     )
 
     @client.on_message()
@@ -1317,7 +1326,7 @@ async def _download_to_server(download_id, session_str, chat_id, msg_id):
             peer_id = chat_id
 
         async def _do(client):
-            msg = await client.get_messages(peer_id, int(msg_id))
+            msg = await asyncio.wait_for(client.get_messages(peer_id, int(msg_id)), timeout=20)
             if not msg or not msg.media:
                 entry["status"] = "failed"
                 entry["error"] = "No downloadable media"
@@ -2624,7 +2633,7 @@ def download_media_route(chat_id, message_id):
                 peer_id = int(chat_id)
             except Exception:
                 peer_id = chat_id
-            msg = await client.get_messages(peer_id, int(message_id))
+            msg = await asyncio.wait_for(client.get_messages(peer_id, int(message_id)), timeout=20)
             if not msg or not msg.media:
                 return None, None, None
             media = getattr(msg, msg.media.value)
