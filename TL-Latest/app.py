@@ -394,6 +394,23 @@ FEATURE_FLAG_DEFS = {
             "Turn off to just show an error instead of re-scanning."
         ),
     },
+    "live_updates": {
+        "label": "Live update engine (background message listening)",
+        "description": (
+            "Keeps a live connection open per account so Pyrogram can stream "
+            "incoming messages/edits/deletes to the on_message / on_raw_update "
+            "/ on_deleted_messages handlers in real time. For channels/groups "
+            "with a large update backlog, Pyrogram's own catch-up call "
+            "(updates.GetChannelDifference) can itself get FloodWait'ed and "
+            "retry in a tight loop, which is a common FloodWait source that "
+            "has NOTHING to do with any of our own feature flags above. "
+            "Turn off to open the account in 'account-opening only' mode: "
+            "get_me / dialogs / on-demand message loads still work, but no "
+            "background listener runs at all (no live updates, no auto-"
+            "preserve, no message logging) — useful for isolating whether "
+            "the update engine itself is what's triggering FloodWait."
+        ),
+    },
 }
 
 def _get_feature_flags_cached():
@@ -758,6 +775,14 @@ def create_telegram_client(session_string):
         api_hash=API_HASH,
         proxy=get_proxy_config(),
         in_memory=True,
+        # no_updates=True fully disables Pyrogram's live-update engine: no
+        # on_message/on_raw_update/on_deleted_messages handler ever fires, and
+        # (critically for FloodWait isolation) Pyrogram never issues its own
+        # background updates.GetChannelDifference catch-up calls, which is a
+        # documented source of FloodWait storms independent of anything our
+        # app's routes do. get_me / get_dialogs / on-demand get_messages calls
+        # are unaffected. Controlled by the 'live_updates' feature flag.
+        no_updates=not is_feature_enabled("live_updates"),
         # sleep_threshold=0 makes Pyrogram raise FloodWait immediately instead
         # of silently sleeping-and-retrying inside its own session layer. Its
         # default (auto-retry for waits under ~10-30s) hides the error from us

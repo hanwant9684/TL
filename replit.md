@@ -15,5 +15,17 @@ Imported from GitHub. A Flask + Pyrogram (pyrofork) web app for viewing/exportin
 - Optional secrets: `GROQ_API_KEY`, `GEMINI_API_KEY` (better translation quality), `DATABASE_URL` (use Postgres instead of SQLite), `PROXY_*` (outbound proxy for Telegram connections).
 - The app gates access behind the `APP_PASSWORD` login screen shown at `/`.
 
+## FloodWait diagnostics (in progress)
+The account was hitting a FloodWait storm from Pyrogram's own background update
+engine (`updates.GetChannelDifference` retrying in a tight loop — unrelated to
+any of the app's own routes). Added a 5th diagnostic feature flag,
+`live_updates`, alongside the existing 4 (`auto_reconnect`, `preserved_media`,
+`thumbnails`, `peer_resync`). All 5 are currently OFF in the database, so the
+app is running in "account-opening only" mode: login + viewing the dialog
+list/messages on demand works, but no background listening, auto-preserve,
+thumbnails, or auto-reconnect run. Turn features back on one at a time via
+`/api/feature-flags` (from the account page's settings) to find which one
+triggers FloodWait.
+
 ## User preferences
 None recorded yet.
