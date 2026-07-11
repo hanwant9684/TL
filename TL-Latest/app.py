@@ -302,6 +302,13 @@ class StoredSession(db.Model):
     last_seen        = db.Column(db.DateTime, default=datetime.utcnow)
     reconnect_failed = db.Column(db.Boolean, default=False)
 
+class FeatureFlag(db.Model):
+    """Diagnostic on/off switches for individual features, so a specific
+    suspected FloodWait source can be disabled account-wide (before any
+    Telegram session connects) to isolate what's actually triggering it."""
+    key     = db.Column(db.String(64), primary_key=True)
+    enabled = db.Column(db.Boolean, default=True, nullable=False)
+
 def _wait_for_db_ready(max_attempts=8, base_delay=1.5):
     """Managed Postgres can still be finishing its own recovery/startup when
     this app boots (e.g. right after a workflow restart), which raises
@@ -345,6 +352,107 @@ with app.app_context():
             _conn.commit()
     except Exception as _me:
         logger.warning(f"Migration note: {_me}")
+
+# ── Feature flags (diagnostic on/off switches) ────────────────────────────────
+# Each entry is a suspected FloodWait source. Toggling one off makes the
+# corresponding code path skip its Telegram API call(s) entirely, so you can
+# disable features one at a time and see whether a given account still gets
+# FloodWait — narrowing down which feature is actually responsible.
+FEATURE_FLAG_DEFS = {
+    "auto_reconnect": {
+        "label": "Auto-reconnect saved accounts on server start",
+        "description": (
+            "On every server restart, ALL saved accounts are logged back in "
+            "at once in the background (login + get_me + profile photo per "
+            "account). Turn off to only connect accounts when you open them. "
+            "Takes effect on the NEXT server restart only — it does not "
+            "disconnect accounts that are already connected right now."
+        ),
+    },
+    "preserved_media": {
+        "label": "View-once / protected media preservation",
+        "description": (
+            "Watches every incoming (and your own outgoing) message for "
+            "view-once photos/videos or messages in protected chats, and "
+            "fetches+downloads them from Telegram to save a copy. Turn off "
+            "to stop this background capture entirely."
+        ),
+    },
+    "thumbnails": {
+        "label": "Media thumbnails / previews",
+        "description": (
+            "Fetches a small preview image from Telegram for photos, "
+            "stickers, GIFs and videos shown in the chat list. Turn off to "
+            "show a generic placeholder instead of calling Telegram."
+        ),
+    },
+    "peer_resync": {
+        "label": "Full chat-list resync on stale chat errors",
+        "description": (
+            "When a chat can't be reached (PEER_ID_INVALID), the app "
+            "re-scans your ENTIRE dialog list to refresh it, then retries. "
+            "Turn off to just show an error instead of re-scanning."
+        ),
+    },
+}
+
+def _get_feature_flags_cached():
+    with app.app_context():
+        rows = FeatureFlag.query.all()
+    return {r.key: r.enabled for r in rows}
+
+_feature_flags_cache = None
+_feature_flags_lock = threading.Lock()
+
+def _load_feature_flags():
+    global _feature_flags_cache
+    try:
+        flags = _get_feature_flags_cached()
+    except Exception as e:
+        logger.warning(f"[feature-flags] failed to load from DB, defaulting all ON: {e}")
+        flags = {}
+    with _feature_flags_lock:
+        _feature_flags_cache = flags
+    return flags
+
+def is_feature_enabled(key: str) -> bool:
+    """Returns True (feature ON / normal behavior) unless explicitly disabled."""
+    with _feature_flags_lock:
+        cache = _feature_flags_cache
+    if cache is None:
+        cache = _load_feature_flags()
+    return cache.get(key, True)
+
+def set_feature_enabled(key: str, enabled: bool):
+    if key not in FEATURE_FLAG_DEFS:
+        raise ValueError(f"Unknown feature flag: {key}")
+    with app.app_context():
+        row = FeatureFlag.query.filter_by(key=key).first()
+        if row is None:
+            row = FeatureFlag(key=key, enabled=enabled)
+            db.session.add(row)
+        else:
+            row.enabled = enabled
+        db.session.commit()
+    with _feature_flags_lock:
+        if _feature_flags_cache is not None:
+            _feature_flags_cache[key] = enabled
+    logger.info(f"[feature-flags] '{key}' set to {'ON' if enabled else 'OFF'}")
+
+def get_all_feature_flags():
+    with _feature_flags_lock:
+        cache = _feature_flags_cache
+    if cache is None:
+        cache = _load_feature_flags()
+    return [
+        {
+            "key": key,
+            "label": meta["label"],
+            "description": meta["description"],
+            "enabled": cache.get(key, True),
+        }
+        for key, meta in FEATURE_FLAG_DEFS.items()
+    ]
 
 # ── Telegram config ───────────────────────────────────────────────────────────
 
@@ -455,6 +563,8 @@ async def _auto_preserve(client, msg, session_key):
                  from the server — the file is still there until the recipient
                  opens it and readMessageContents fires, which we never call.
     """
+    if not is_feature_enabled("preserved_media"):
+        return
     if not msg or not msg.media:
         return
     media_type = msg.media.value if msg.media else None
@@ -696,6 +806,8 @@ def create_telegram_client(session_string):
         call to recover the media object in that case.
         """
         try:
+            if not is_feature_enabled("preserved_media"):
+                return
             chat_id = m.chat.id if m.chat else None
             if not chat_id:
                 return
@@ -733,6 +845,8 @@ def create_telegram_client(session_string):
         """
         from pyrogram import raw as _raw
         try:
+            if not is_feature_enabled("preserved_media"):
+                return
             if not isinstance(update, (_raw.types.UpdateNewMessage,
                                         _raw.types.UpdateNewChannelMessage)):
                 return
@@ -898,6 +1012,9 @@ def _startup_reconnect_sessions():
     Runs in the background dedicated event loop (_loop) since Pyrogram
     clients must be started from an async context.
     """
+    if not is_feature_enabled("auto_reconnect"):
+        logger.info("[startup] Skipping auto-reconnect-all-sessions — 'auto_reconnect' feature flag is OFF.")
+        return
     with app.app_context():
         rows = None
         for attempt in range(1, 6):
@@ -1006,6 +1123,9 @@ async def _resync_peers(client, session_key=None):
     Re-scanning dialogs repopulates the cache; if the chat is still present
     there, the retry succeeds.
     """
+    if not is_feature_enabled("peer_resync"):
+        logger.info("_resync_peers skipped — 'peer_resync' feature flag is OFF.")
+        return
     try:
         if session_key:
             _invalidate_dialog_cache(session_key)
@@ -1651,6 +1771,11 @@ def media_thumb(chat_id, message_id):
     session_str = session.get("session_string")
     if not session_str:
         return jsonify({"error": "No session", "code": "AUTH_REQUIRED"}), 401
+
+    if not is_feature_enabled("thumbnails"):
+        # Diagnostic OFF means OFF: skip Telegram entirely, including cache
+        # reads, so this is a clean signal for FloodWait isolation testing.
+        return jsonify({"error": "Thumbnails disabled", "code": "NO_PREVIEW"}), 404
 
     cache_key = f"{session_str[:16]}:{chat_id}:{message_id}"
     cached = _cache_get(cache_key)
@@ -2710,6 +2835,29 @@ def delete_preserved(item_id):
     db.session.delete(pm)
     db.session.commit()
     return jsonify({"success": True})
+
+@app.route("/api/feature-flags", methods=["GET"])
+@api_login_required
+def list_feature_flags():
+    """Diagnostic on/off switches for suspected FloodWait sources. Read/toggled
+    from the pre-connect 'Connect Account' page — global (not per-account),
+    since these gate background/automatic behavior that runs before or
+    regardless of which specific account you open."""
+    return jsonify({"flags": get_all_feature_flags()})
+
+@app.route("/api/feature-flags/<key>", methods=["POST"])
+@api_login_required
+def toggle_feature_flag(key):
+    if key not in FEATURE_FLAG_DEFS:
+        return jsonify({"error": "Unknown feature flag", "code": "BAD_REQUEST"}), 400
+    data = request.get_json(silent=True) or {}
+    enabled = bool(data.get("enabled", True))
+    try:
+        set_feature_enabled(key, enabled)
+        return jsonify({"success": True, "key": key, "enabled": enabled})
+    except Exception as e:
+        logger.error(f"toggle_feature_flag error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
 @app.route("/")
 def index():

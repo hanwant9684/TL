@@ -33,6 +33,18 @@
         .acct-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .acct-del { background: #0e1621; border: 1px solid #2a3a4a; border-radius: 8px; padding: 0 13px; color: #6c7883; font-size: 1rem; cursor: pointer; transition: border-color 0.2s, color 0.2s; flex-shrink: 0; }
         .acct-del:hover { border-color: #e05c5c; color: #e05c5c; }
+        .diag { margin-top: 20px; border-top: 1px solid #1e2d3d; padding-top: 18px; }
+        .diag summary { font-size: 0.85rem; color: #8ab4d4; cursor: pointer; user-select: none; }
+        .diag-note { font-size: 0.76rem; color: #6c7883; line-height: 1.5; margin: 10px 0 14px; }
+        .flag-row { display: flex; align-items: flex-start; gap: 10px; padding: 10px 0; border-bottom: 1px solid #1e2d3d; }
+        .flag-row:last-child { border-bottom: none; }
+        .flag-row input[type=checkbox] { margin-top: 3px; width: 16px; height: 16px; accent-color: #5288c1; flex-shrink: 0; cursor: pointer; }
+        .flag-text { flex: 1; min-width: 0; }
+        .flag-label { font-size: 0.85rem; font-weight: 600; color: #fff; }
+        .flag-desc { font-size: 0.75rem; color: #6c7883; line-height: 1.45; margin-top: 3px; }
+        .flag-state { font-size: 0.7rem; font-weight: 600; padding: 2px 7px; border-radius: 4px; margin-left: 6px; white-space: nowrap; }
+        .flag-state.on { background: rgba(76,175,80,0.15); color: #4caf50; }
+        .flag-state.off { background: rgba(231,76,60,0.15); color: #e74c3c; }
     </style>
 </head>
 <body>
@@ -78,7 +90,72 @@ async def main():
 
 asyncio.run(main())</pre>
         </div>
+        <details class="diag" id="diag-panel">
+            <summary>⚙ FloodWait diagnostics — disable individual features</summary>
+            <p class="diag-note">
+                Turn a feature OFF, then reconnect/use the account and see if it still
+                gets FloodWait. These are global switches — they apply before any
+                account connects, since a feature that keeps an account from opening
+                can't be tested from inside that account's page.
+            </p>
+            <div id="flags-list"><p style="color:#6c7883;font-size:0.78rem;">Loading…</p></div>
+        </details>
     </div>
+    <script>
+        (async function loadFeatureFlags() {
+            const list = document.getElementById('flags-list');
+            try {
+                const res = await fetch('/api/feature-flags');
+                if (!res.ok) { list.innerHTML = '<p style="color:#6c7883;font-size:0.78rem;">Could not load.</p>'; return; }
+                const data = await res.json();
+                const flags = data.flags || [];
+                list.innerHTML = '';
+                flags.forEach(f => {
+                    const row = document.createElement('div');
+                    row.className = 'flag-row';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = f.enabled;
+                    cb.id = 'flag-' + f.key;
+                    const text = document.createElement('div');
+                    text.className = 'flag-text';
+                    const stateSpan = document.createElement('span');
+                    stateSpan.className = 'flag-state ' + (f.enabled ? 'on' : 'off');
+                    stateSpan.textContent = f.enabled ? 'ON' : 'OFF';
+                    text.innerHTML = `<span class="flag-label"></span>`;
+                    text.querySelector('.flag-label').textContent = f.label;
+                    text.querySelector('.flag-label').appendChild(stateSpan);
+                    const desc = document.createElement('div');
+                    desc.className = 'flag-desc';
+                    desc.textContent = f.description;
+                    text.appendChild(desc);
+                    cb.onchange = async () => {
+                        cb.disabled = true;
+                        try {
+                            const r = await fetch('/api/feature-flags/' + f.key, {
+                                method: 'POST',
+                                headers: { 'Content-Type': 'application/json' },
+                                body: JSON.stringify({ enabled: cb.checked })
+                            });
+                            if (!r.ok) throw new Error('failed');
+                            stateSpan.textContent = cb.checked ? 'ON' : 'OFF';
+                            stateSpan.className = 'flag-state ' + (cb.checked ? 'on' : 'off');
+                        } catch (e) {
+                            cb.checked = !cb.checked;
+                            alert('Failed to update this setting. Please try again.');
+                        } finally {
+                            cb.disabled = false;
+                        }
+                    };
+                    row.appendChild(cb);
+                    row.appendChild(text);
+                    list.appendChild(row);
+                });
+            } catch (e) {
+                list.innerHTML = '<p style="color:#6c7883;font-size:0.78rem;">Could not load.</p>';
+            }
+        })();
+    </script>
     <script>
         (async function loadSavedAccounts() {
             try {
