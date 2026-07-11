@@ -398,6 +398,40 @@ def get_proxy_config():
         proxy["password"] = os.environ.get("PROXY_PASS")
     return proxy
 
+_gm_throttle_locks: dict = {}   # session_key -> asyncio.Lock
+_gm_last_call: dict = {}        # session_key -> monotonic timestamp of last call
+_gm_throttle_state_lock = threading.Lock()  # guards the two dicts above
+_GM_MIN_GAP = 0.35  # min seconds between preserve-fallback get_messages calls, per session
+
+def _get_gm_lock(session_key):
+    with _gm_throttle_state_lock:
+        lock = _gm_throttle_locks.get(session_key)
+        if lock is None:
+            lock = asyncio.Lock()
+            _gm_throttle_locks[session_key] = lock
+        return lock
+
+async def _throttled_get_messages(client, chat_id, msg_id, session_key, timeout=15):
+    """Serialize + pace the view-once/preserve fallback get_messages() calls.
+
+    Telegram rate-limits channels.GetMessages per account (session), not
+    app-wide. When several media messages (e.g. an album, or a burst of
+    view-once photos) arrive close together on the SAME account, each one
+    independently triggered its own concurrent get_messages() call — enough
+    of those landing in the same instant tripped FloodWait. This enforces a
+    minimum gap between calls scoped per session_key, so unrelated accounts
+    aren't unnecessarily serialized against each other.
+    """
+    lock = _get_gm_lock(session_key)
+    async with lock:
+        now = time.monotonic()
+        last = _gm_last_call.get(session_key, 0.0)
+        wait = _GM_MIN_GAP - (now - last)
+        if wait > 0:
+            await asyncio.sleep(wait)
+        _gm_last_call[session_key] = time.monotonic()
+    return await asyncio.wait_for(client.get_messages(chat_id, msg_id), timeout=timeout)
+
 _PRESERVE_EXT = {
     "photo": ".jpg", "video": ".mp4", "audio": ".mp3",
     "voice": ".ogg", "animation": ".mp4", "sticker": ".webp",
@@ -444,10 +478,7 @@ async def _auto_preserve(client, msg, session_key):
     # has called readMessageContents yet.
     if not is_view_once and media_obj is None and media_type in ('photo', 'video', 'voice', 'video_note'):
         try:
-            fresh = await asyncio.wait_for(
-                client.get_messages(chat_id, msg.id),
-                timeout=15
-            )
+            fresh = await _throttled_get_messages(client, chat_id, msg.id, session_key, timeout=15)
             if fresh and fresh.media and fresh.media.value == media_type:
                 fresh_obj = getattr(fresh, media_type, None)
                 if fresh_obj is not None:
@@ -767,10 +798,7 @@ def create_telegram_client(session_string):
             # The file is still accessible because no client has called
             # readMessageContents yet (we never call it).
             try:
-                full_msg = await asyncio.wait_for(
-                    c.get_messages(chat_id, msg_id),
-                    timeout=20
-                )
+                full_msg = await _throttled_get_messages(c, chat_id, msg_id, session_key, timeout=20)
                 if full_msg and full_msg.media:
                     logger.info(f"[raw_preserve] fetched full msg {msg_id} — calling _auto_preserve")
                     await _auto_preserve(c, full_msg, session_key)
