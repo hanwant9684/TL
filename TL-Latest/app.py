@@ -202,6 +202,8 @@ except RuntimeError:
 
 from pyrogram import Client, filters as pyro_filters
 from pyrogram import utils as _pyro_utils
+from pyrogram import types as _pyro_types
+from pyrogram.handlers import MessageHandler as _MessageHandler, EditedMessageHandler as _EditedMessageHandler
 from pyrogram.raw import functions as _raw_functions, types as _raw_types
 try:
     from pyrogram.errors import FloodWait as _FloodWait
@@ -1075,6 +1077,58 @@ def create_telegram_client(session_string):
             logger.info(f"[handle_updates:{session_key}] {updates}")
 
     client.handle_updates = _patched_handle_updates
+
+    # ── Skip reply-to-message resolution for non-preserved chats ─────────────
+    # Independent of both patches above, Pyrogram's *own* message parser
+    # (Dispatcher.message_parser -> Message._parse) resolves every incoming
+    # message's reply_to_message by calling client.get_messages(...) with
+    # replies=1 (the hardcoded default), for EVERY dispatched message that is
+    # itself a reply — regardless of live_updates catch-up/is_min status, and
+    # regardless of the ProtectedChat allowlist used above. That get_messages()
+    # call hardcodes sleep_threshold=-1 inside Pyrogram (always raise, ignores
+    # our client-level sleep_threshold=30), so it gets zero flood/backoff
+    # protection. On a large account (500+ chats) with real reply-heavy
+    # traffic, a burst of these fire concurrently on the single MTProto
+    # connection right after reconnect and can itself break the socket
+    # ("Connection lost" / OSError), which then cascades into further
+    # reconnect churn — a distinct failure mode from the is_min/GetChannelDifference
+    # storm already handled above, hit only at much larger chat counts.
+    #
+    # Fix: pass replies=0 (skip the extra network fetch, keep reply_to_message_id
+    # set so the UI still shows "replying to message #N") for any chat NOT in
+    # the preserved/🛡 Protect set. Preserved chats keep full reply resolution
+    # since that's exactly the small set the user cares about seeing live.
+    def _chat_id_from_raw_message(raw_message):
+        peer = getattr(raw_message, "peer_id", None)
+        if isinstance(peer, _raw_types.PeerUser):
+            return peer.user_id
+        if isinstance(peer, _raw_types.PeerChat):
+            return -peer.chat_id
+        if isinstance(peer, _raw_types.PeerChannel):
+            return _pyro_utils.get_channel_id(peer.channel_id)
+        return None
+
+    async def _patched_message_parser(update, users, chats):
+        chat_id = _chat_id_from_raw_message(getattr(update, "message", None))
+        replies = 1 if (chat_id is not None and chat_id in _get_protected_set(session_key)) else 0
+        return (
+            await _pyro_types.Message._parse(
+                client, update.message, users, chats,
+                is_scheduled=isinstance(update, _raw_types.UpdateNewScheduledMessage),
+                replies=replies,
+            ),
+            _MessageHandler
+        )
+
+    async def _patched_edited_message_parser(update, users, chats):
+        parsed, _ = await _patched_message_parser(update, users, chats)
+        return (parsed, _EditedMessageHandler)
+
+    for _update_type in (_raw_types.UpdateNewMessage, _raw_types.UpdateNewChannelMessage,
+                         _raw_types.UpdateNewScheduledMessage):
+        client.dispatcher.update_parsers[_update_type] = _patched_message_parser
+    for _update_type in (_raw_types.UpdateEditMessage, _raw_types.UpdateEditChannelMessage):
+        client.dispatcher.update_parsers[_update_type] = _patched_edited_message_parser
 
     @client.on_message()
     async def log_message(c, m):

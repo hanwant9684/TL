@@ -134,3 +134,44 @@ found by reading Pyrogram's actual source rather than guessing from symptoms:
 and matters more than any update-gap tuning; a storm with no
 `AUTH_KEY_DUPLICATED` but heavy `is_min`-triggered `GetChannelDifference`
 volume right after reconnect is cause #1 (unscoped live catch-up).
+
+## Third real bug: found only at large scale (500+ chats)
+
+Both fixes above only gate Pyrogram's *catch-up/gap-recovery* machinery. A
+third, independent storm source is Pyrogram's own **per-message reply
+resolution**: `Dispatcher`'s `message_parser`/`edited_message_parser` call
+`Message._parse(..., replies=1)` (the hardcoded default) for every dispatched
+message, and `_parse` then calls `client.get_messages(...)` to fetch
+`reply_to_message` whenever a message is itself a reply — completely
+independent of the `handle_updates`/`recover_gaps` patches and the
+`ProtectedChat` allowlist used there. That `get_messages()` call hardcodes
+`sleep_threshold=-1` inside Pyrogram (always raise; ignores the client-level
+`sleep_threshold=30`), so it has zero flood/backoff protection.
+
+**Symptom:** on an account with ~100 chats this never showed up (not enough
+concurrent reply traffic to matter). On a 500+ chat account with real
+reply-heavy activity, a burst of these fire concurrently on the single MTProto
+connection right after reconnect and can break the socket itself —
+`asyncio - WARNING - socket.send() raised exception` repeated rapidly, then
+`pyrogram.dispatcher - ERROR - Connection lost` with an `OSError` traceback
+through `message_parser -> Message._parse -> get_messages`, then several
+minutes of `Unable to connect due to network issues: Connection timed out`
+before it self-heals. This is a distinct failure mode from causes #1/#2 above
+— no `AUTH_KEY_DUPLICATED`, and it hits during steady-state live traffic, not
+just at boot/reconnect.
+
+**Fix applied:** monkeypatch `client.dispatcher.update_parsers` (an instance
+dict keyed by raw update type, populated in `Dispatcher.__init__` from
+`client.dispatcher = Dispatcher(self)` inside `Client.__init__` — available
+immediately after `Client(...)` construction, no `.start()` needed) for the
+`UpdateNewMessage`/`UpdateNewChannelMessage`/`UpdateNewScheduledMessage`/
+`UpdateEditMessage`/`UpdateEditChannelMessage` keys, to call `Message._parse`
+with `replies=0` (skip the extra network fetch, `reply_to_message_id` is still
+set so the UI can still show "replying to #N") for any chat not in the
+preserved/🛡 Protect set, and `replies=1` only for preserved chats.
+
+**Why this matters generally:** a fix validated at one scale (100 chats) does
+not necessarily hold at 5x that scale — the underlying bug class (a "cheap
+per-item extra network round-trip" baked into a hot per-update code path with
+no gating) can have multiple independent instances in different code paths,
+and only enough concurrent volume exposes each one.
