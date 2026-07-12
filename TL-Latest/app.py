@@ -1338,6 +1338,48 @@ threading.Thread(target=_loop.run_forever, daemon=True).start()
 def run_async(coro):
     return asyncio.run_coroutine_threadsafe(coro, _loop).result()
 
+# ── Clean shutdown on SIGTERM / SIGINT ────────────────────────────────────────
+# When the Replit workflow manager kills this process (SIGTERM), Pyrogram
+# normally gets no chance to send a proper MTProto CloseSession to Telegram.
+# Telegram then keeps the auth_key session "half-alive" for several seconds.
+# When the new process starts immediately afterwards and opens a fresh TCP
+# connection with the same auth_key, Telegram sends stale packets that fail
+# mtproto.unpack() → ValueError → session.py:handle_packet fires
+# self.loop.create_task(self.restart()) as a background task.
+# Simultaneously, the initial Ping times out (START_TIMEOUT=2 s) →
+# session.start() calls stop() → also awaits recv_task.
+# Two coroutines now await the same recv_task; asyncio StreamReader detects
+# both callers and raises:
+#   RuntimeError: read() called while another coroutine is already waiting
+#                 for incoming data
+# (confirmed in session.py:stop() "await self.recv_task" and handle_packet()
+#  "self.loop.create_task(self.restart())" at session.py:204/300/329)
+#
+# Fix: stop all clients cleanly on SIGTERM so Telegram closes the session
+# before the new process starts.
+
+import signal as _signal, sys as _sys
+
+async def _shutdown_all_clients():
+    for ss, client in list(telegram_clients.items()):
+        try:
+            await client.stop()
+            logger.info(f"[shutdown] Cleanly stopped Telegram client {ss[:16]}")
+        except Exception as exc:
+            logger.warning(f"[shutdown] Error stopping client {ss[:16]}: {exc}")
+
+def _sigterm_handler(signum, frame):
+    logger.info(f"[shutdown] Signal {signum} received — stopping all Telegram clients before exit")
+    try:
+        future = asyncio.run_coroutine_threadsafe(_shutdown_all_clients(), _loop)
+        future.result(timeout=8)
+    except Exception as exc:
+        logger.warning(f"[shutdown] Client cleanup error: {exc}")
+    _sys.exit(0)
+
+_signal.signal(_signal.SIGTERM, _sigterm_handler)
+_signal.signal(_signal.SIGINT,  _sigterm_handler)
+
 # ── Startup: restore download queue + auto-reconnect saved Telegram sessions ──
 
 def _startup_restore():
@@ -1659,6 +1701,15 @@ def _is_broken_pipe(e):
       - asyncio WARNING text "socket.send() raised exception"
         propagates as a generic OSError or the underlying socket error;
         the asyncio logger swallows the real type so we match on string.
+      - RuntimeError "read() called while another coroutine is already waiting"
+        pyrofork session.py concurrent-restart race: two coroutines both await
+        recv_task after handle_packet fires create_task(restart()) at the same
+        time as session.start()'s except-handler calls stop().  The session is
+        permanently broken; the client must be force-recreated.
+        (confirmed at session.py:stop() "await self.recv_task" and
+         handle_packet() "self.loop.create_task(self.restart())" lines 204/300/329)
+      - RuntimeError "Session failed to start" — our own health-check sentinel
+        raised in get_client() when session.is_started is not set after start().
     """
     s = str(e)
     n = type(e).__name__
@@ -1668,6 +1719,8 @@ def _is_broken_pipe(e):
         or "ConnectionAbortedError" in n
         or ("OSError" in n and ("reset by peer" in s or "Errno 104" in s or "[Errno 32]" in s))
         or ("socket" in s.lower() and ("send" in s.lower() or "recv" in s.lower()))
+        or ("RuntimeError" in n and "read() called while another coroutine" in s)
+        or ("RuntimeError" in n and "Session failed to start" in s)
     )
 
 def _is_auth_key_duplicated(e):
@@ -1762,6 +1815,37 @@ async def get_client(session_string, force_reconnect=False):
             logger.info(f"[get_client:{sk}] step 2/4 — cache warm; starting Pyrogram client")
             client = create_telegram_client(session_string)
             await client.start()
+
+            # ── Fix C: post-start health check ───────────────────────────────
+            # After client.start() returns, verify the underlying MTProto
+            # session actually reached the "started" state.  If the concurrent-
+            # restart race (two coroutines awaiting recv_task simultaneously)
+            # fired during start(), pyrofork's while-True loop may have exited
+            # with is_started still unset — the client object exists but every
+            # API call will hang or raise.  Detecting this here lets
+            # run_with_reconnect force-recreate the client instead of caching
+            # a permanently broken one.
+            # session.is_started is an asyncio.Event set at session.py:159
+            # ("self.is_started.set()" after successful GetConfig round-trip).
+            session_ok = (
+                hasattr(client, 'session')
+                and client.session is not None
+                and client.session.is_started.is_set()
+            )
+            if not session_ok:
+                logger.warning(
+                    f"[get_client:{sk}] session.is_started not set after client.start() — "
+                    f"concurrent-restart race detected; discarding broken client"
+                )
+                try:
+                    await client.stop()
+                except Exception:
+                    pass
+                raise RuntimeError(
+                    "Session failed to start: concurrent recv_task race "
+                    "(pyrofork session.py handle_packet restart + START_TIMEOUT race)"
+                )
+
             logger.info(f"[get_client:{sk}] step 3/4 — client started; holding lock for 2 s while recover_gaps runs")
 
             # ── Hold the creation lock while recover_gaps runs ────────────────
