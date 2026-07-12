@@ -1611,7 +1611,27 @@ _thumb_inflight_lock = threading.Lock()
 # ── Client management ─────────────────────────────────────────────────────────
 
 def _is_broken_pipe(e):
-    return "Broken pipe" in str(e) or "BrokenPipeError" in type(e).__name__
+    """Detect any socket-level disconnect from Telegram's side.
+
+    Pyrogram surfaces these in several forms depending on where the
+    failure is caught:
+      - BrokenPipeError / "Broken pipe"           classic EPIPE write to closed socket
+      - ConnectionResetError / "Connection reset"  ECONNRESET — Telegram reset the TCP conn
+      - OSError errno 104                          Linux: Connection reset by peer
+      - ConnectionAbortedError                     Windows equivalent of ECONNRESET
+      - asyncio WARNING text "socket.send() raised exception"
+        propagates as a generic OSError or the underlying socket error;
+        the asyncio logger swallows the real type so we match on string.
+    """
+    s = str(e)
+    n = type(e).__name__
+    return (
+        "Broken pipe" in s or "BrokenPipeError" in n
+        or "Connection reset" in s or "ConnectionResetError" in n
+        or "ConnectionAbortedError" in n
+        or ("OSError" in n and ("reset by peer" in s or "Errno 104" in s or "[Errno 32]" in s))
+        or ("socket" in s.lower() and ("send" in s.lower() or "recv" in s.lower()))
+    )
 
 def _is_auth_key_duplicated(e):
     return "AUTH_KEY_DUPLICATED" in str(e)
@@ -1662,6 +1682,16 @@ async def get_client(session_string, force_reconnect=False):
         if session_string not in telegram_clients:
             client = create_telegram_client(session_string)
             await client.start()
+            # ── Stabilisation window ──────────────────────────────────────────
+            # On accounts with 1 000+ chats, Telegram pushes a massive initial
+            # update blob the moment the MTProto handshake completes.  If any
+            # API call (get_me, get_dialogs, …) writes to the socket while that
+            # burst is still being received, we get 4+ concurrent socket writes
+            # on the same connection, Telegram resets it, and every pending
+            # write fails simultaneously ("socket.send() raised exception" × N).
+            # Waiting here lets _patched_handle_updates() drain the queue and
+            # the connection reach a quiet state before we issue new requests.
+            await asyncio.sleep(2.0)
             telegram_clients[session_string] = client
     return telegram_clients[session_string]
 
@@ -1697,6 +1727,13 @@ async def run_with_reconnect(session_string, coro_factory):
                 continue
             if _is_broken_pipe(e) and not broken_pipe_retried:
                 broken_pipe_retried = True
+                # Back off before force-reconnecting so Telegram's reset window
+                # clears.  Reconnecting immediately after a socket.send() storm
+                # opens a fresh connection into the same burst conditions and
+                # fails again instantly.
+                wait_bp = 3.0 + random.uniform(0, 2)
+                logger.warning(f"[run_with_reconnect] Socket disconnect — waiting {wait_bp:.1f}s before reconnect: {e}")
+                await asyncio.sleep(wait_bp)
                 continue
             raise
 
