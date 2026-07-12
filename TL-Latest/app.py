@@ -1552,7 +1552,16 @@ def _prewarm_protected_cache(session_key: str) -> None:
     _get_protected_set() for this session_key are instant in-memory dict
     lookups — no DB I/O, no event-loop blocking risk.
     """
-    _get_protected_set(session_key)  # no-op if already warm
+    import threading
+    tid = threading.current_thread().name
+    with _protected_chats_mem_lock:
+        already_warm = session_key in _protected_chats_mem
+    if already_warm:
+        logger.info(f"[prewarm:{session_key}] cache already warm — skipping DB call (thread={tid})")
+        return
+    logger.info(f"[prewarm:{session_key}] cache cold — running DB load on thread={tid} (NOT the event loop thread)")
+    result = _get_protected_set(session_key)
+    logger.info(f"[prewarm:{session_key}] done — {len(result)} protected chat(s) loaded into cache")
 
 # ── Translation cache — avoids re-hitting AI APIs for identical requests ──────
 _translation_cache: dict = {}      # (text_md5, target_lang) -> (translated, engine)
@@ -1746,12 +1755,14 @@ async def get_client(session_string, force_reconnect=False):
             # _get_protected_set() within handlers are instant dict lookups.
             # (Official Pyrogram FAQ: "blocking the event loop for too long"
             #  is a documented cause of socket.send() / connection-lost errors.)
+            logger.info(f"[get_client:{sk}] step 1/4 — pre-warming protected-chat cache off event loop")
             await asyncio.get_event_loop().run_in_executor(
                 None, _prewarm_protected_cache, sk
             )
-
+            logger.info(f"[get_client:{sk}] step 2/4 — cache warm; starting Pyrogram client")
             client = create_telegram_client(session_string)
             await client.start()
+            logger.info(f"[get_client:{sk}] step 3/4 — client started; holding lock for 2 s while recover_gaps runs")
 
             # ── Hold the creation lock while recover_gaps runs ────────────────
             # _patched_recover_gaps() fires immediately after client.start() for
@@ -1761,6 +1772,7 @@ async def get_client(session_string, force_reconnect=False):
             # writes during the most sensitive period of the session lifecycle.
             await asyncio.sleep(2.0)
             telegram_clients[session_string] = client
+            logger.info(f"[get_client:{sk}] step 4/4 — client registered; session fully ready")
     return telegram_clients[session_string]
 
 async def run_with_reconnect(session_string, coro_factory):
