@@ -1608,13 +1608,41 @@ def _is_broken_pipe(e):
 def _is_auth_key_duplicated(e):
     return "AUTH_KEY_DUPLICATED" in str(e)
 
+# Broken pipes aren't the only way a Client silently dies. On accounts with
+# hundreds of chats + live_updates on, a real network blip (socket timeout)
+# can trigger Pyrogram's *own* internal Session.restart() retry loop; if that
+# retry ever touches the client's sqlite storage after something else has
+# already stopped it, every subsequent call on that client raises one of:
+#   - "Connection lost"                        (Connection/Session dead)
+#   - "Cannot operate on a closed database"     (storage closed underneath it)
+# Neither of those matched _is_broken_pipe(), so run_with_reconnect() used to
+# just re-raise immediately and leave the dead Client sitting in
+# telegram_clients — every future request reused the same broken client and
+# failed the same way forever, which is what "account won't open" looks like
+# from the outside. Treat these as reconnect-worthy too.
+def _is_connection_dead(e):
+    msg = str(e)
+    return (
+        _is_broken_pipe(e)
+        or "Connection lost" in msg
+        or "closed database" in msg
+        or "Not connected" in msg
+    )
+
 async def clear_client(session_string):
-    if session_string in telegram_clients:
-        try:
-            await telegram_clients[session_string].stop()
-        except Exception:
-            pass
-        del telegram_clients[session_string]
+    """Stop and drop a session's Client. Always goes through the same
+    per-session creation lock as get_client() so teardown never races a
+    concurrent get_client()/force_reconnect() for the same session_string —
+    without this, one code path could delete telegram_clients[session_string]
+    out from under another coroutine that just started using it."""
+    lock = _get_client_creation_lock(session_string)
+    async with lock:
+        if session_string in telegram_clients:
+            try:
+                await telegram_clients[session_string].stop()
+            except Exception:
+                pass
+            del telegram_clients[session_string]
 
 # get_client() used to have a check-then-act race: it checked
 # `session_string not in telegram_clients`, then awaited `client.start()`
@@ -1687,7 +1715,7 @@ async def run_with_reconnect(session_string, coro_factory):
                                f"(flood attempt {flood_attempts}/3)")
                 await asyncio.sleep(wait_s)
                 continue
-            if _is_broken_pipe(e) and not broken_pipe_retried:
+            if _is_connection_dead(e) and not broken_pipe_retried:
                 broken_pipe_retried = True
                 continue
             raise
@@ -3063,13 +3091,14 @@ def download_media_route(chat_id, message_id):
                     yield chunk
             except Exception as e:
                 logger.error(f"Stream error: {e}")
-                if "Broken pipe" in str(e) or "Session" in str(e):
-                    if session_str in telegram_clients:
-                        try:
-                            await telegram_clients[session_str].stop()
-                        except Exception:
-                            pass
-                        del telegram_clients[session_str]
+                if _is_connection_dead(e) or "Session" in str(e):
+                    # Route through clear_client() (per-session lock) instead
+                    # of stopping/deleting inline — doing it inline here raced
+                    # get_client()/force_reconnect() for the same session_string
+                    # from other requests, which is exactly the kind of race
+                    # that produces "Cannot operate on a closed database"
+                    # cascades from Pyrogram's own internal reconnect tasks.
+                    await clear_client(session_str)
 
         def stream_wrapper():
             import queue
