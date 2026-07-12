@@ -18,3 +18,7 @@ TL-Latest/instance/
 
 # Secrets / env
 .env
+
+*.db
+*.sqlite
+*.sqlite3
