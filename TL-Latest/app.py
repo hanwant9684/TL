@@ -573,80 +573,6 @@ _PRESERVE_EXT = {
     "video_note": ".mp4", "document": ".bin",
 }
 
-def _write_file_sync(path, data):
-    """Blocking file write, always run via asyncio.to_thread() from async
-    callers. Preserved-media writes can be large (videos), and this function
-    used to be called inline from the shared Pyrogram event loop — see the
-    to_thread comment on _persist_preserved_media_sync for why that's unsafe."""
-    with open(path, 'wb') as fh:
-        fh.write(data)
-
-
-def _persist_preserved_media_sync(session_key, chat_id, message_id, downloaded,
-                                   raw_name, media_type, reason, saved_at, file_bytes):
-    """Blocking disk read + DB write for a preserved-media record. Must run via
-    asyncio.to_thread() from _auto_preserve(), never called inline.
-
-    _auto_preserve() runs as a Pyrogram update handler on the single shared
-    asyncio event loop that also drives every logged-in session's MTProto
-    connection (ping/keepalive, socket reads). Doing synchronous disk I/O
-    (open/read/write) or a SQLAlchemy commit inline here blocks that shared
-    loop for the duration of the call. For small text messages that's
-    negligible (see log_message's existing to_thread offload for the same
-    reason) but preserved media can be tens/hundreds of MB — long enough to
-    starve Pyrogram's own keepalive/ping task and read loop, which Telegram's
-    server sees as a stalled connection and resets, producing a
-    connect -> "Connection lost" -> reconnect loop that never settles as long
-    as live updates + a busy preserved/protected chat keep triggering more
-    downloads. Returns the file size on success, or None on failure.
-    """
-    try:
-        size = os.path.getsize(downloaded)
-        if file_bytes is None:
-            try:
-                with open(downloaded, 'rb') as fh:
-                    file_bytes = fh.read()
-            except Exception:
-                file_bytes = None
-        with app.app_context():
-            db.session.add(PreservedMedia(
-                session_key      = session_key,
-                chat_id          = chat_id,
-                message_id       = message_id,
-                file_path        = downloaded,
-                file_name        = raw_name,
-                file_size        = size,
-                media_type       = media_type,
-                reason           = reason,
-                saved_at         = saved_at or datetime.utcnow(),
-                original_deleted = False,
-                file_data        = file_bytes,
-            ))
-            db.session.commit()
-        return size
-    except Exception as dbe:
-        from sqlalchemy.exc import IntegrityError as _IntegrityError
-        if isinstance(dbe, _IntegrityError):
-            # Duplicate — another handler (on_message vs raw safety-net race)
-            # already saved this message. Treat as a successful no-op.
-            logger.debug(f"[preserve] duplicate insert ignored for msg {message_id} "
-                         f"(uq_preserved_media_identity) — already preserved")
-            try:
-                with app.app_context():
-                    db.session.rollback()
-            except Exception:
-                pass
-            return -1  # sentinel: duplicate, not a real failure
-        else:
-            logger.error(f"[preserve] DB write failed msg {message_id}: {dbe}")
-            try:
-                with app.app_context():
-                    db.session.rollback()
-            except Exception:
-                pass
-            raise
-
-
 async def _auto_preserve(client, msg, session_key):
     """Download and record media that should be preserved (view-once or protected chat).
 
@@ -749,7 +675,8 @@ async def _auto_preserve(client, msg, session_key):
             )
             if data:
                 file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                await asyncio.to_thread(_write_file_sync, dest, file_bytes)
+                with open(dest, 'wb') as fh:
+                    fh.write(file_bytes)
                 downloaded = dest
                 logger.debug(f"[preserve] S2 (in_memory) success msg {msg.id}")
         except Exception as e2:
@@ -769,7 +696,8 @@ async def _auto_preserve(client, msg, session_key):
                 )
                 if data:
                     file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                    await asyncio.to_thread(_write_file_sync, dest, file_bytes)
+                    with open(dest, 'wb') as fh:
+                        fh.write(file_bytes)
                     downloaded = dest
                     logger.debug(f"[preserve] S3 (file_id) success msg {msg.id}")
             except Exception as e3:
@@ -785,21 +713,47 @@ async def _auto_preserve(client, msg, session_key):
         return
 
     # ── Persist to DB ─────────────────────────────────────────────────────────
-    # Offloaded to a worker thread — see _persist_preserved_media_sync's
-    # docstring for why running this inline on the shared event loop causes
-    # the live_updates "Connection lost" reconnect storm on busy/preserved
-    # chats (blocking disk + DB I/O starves Pyrogram's own keepalive task).
     try:
-        size = await asyncio.to_thread(
-            _persist_preserved_media_sync, session_key, chat_id, msg.id,
-            downloaded, raw_name, media_type, reason, msg.date, file_bytes
-        )
-        if size == -1:
-            pass  # duplicate, already logged inside the helper
+        size = os.path.getsize(downloaded)
+        if file_bytes is None:
+            try:
+                with open(downloaded, 'rb') as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                file_bytes = None
+        with app.app_context():
+            db.session.add(PreservedMedia(
+                session_key      = session_key,
+                chat_id          = chat_id,
+                message_id       = msg.id,
+                file_path        = downloaded,
+                file_name        = raw_name,
+                file_size        = size,
+                media_type       = media_type,
+                reason           = reason,
+                saved_at         = msg.date or datetime.utcnow(),
+                original_deleted = False,
+                file_data        = file_bytes,
+            ))
+            db.session.commit()
+        logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
+    except Exception as dbe:
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+        if isinstance(dbe, _IntegrityError):
+            # Duplicate — another handler (on_message vs raw safety-net race)
+            # already saved this message.  Treat as a successful no-op.
+            logger.debug(f"[preserve] duplicate insert ignored for msg {msg.id} "
+                         f"(uq_preserved_media_identity) — already preserved")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
         else:
-            logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
-    except Exception:
-        pass  # already logged inside _persist_preserved_media_sync
+            logger.error(f"[preserve] DB write failed msg {msg.id}: {dbe}")
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
 
 
 def _log_message_sync(message_id, chat_id, user_id, text, date):
@@ -1608,41 +1562,13 @@ def _is_broken_pipe(e):
 def _is_auth_key_duplicated(e):
     return "AUTH_KEY_DUPLICATED" in str(e)
 
-# Broken pipes aren't the only way a Client silently dies. On accounts with
-# hundreds of chats + live_updates on, a real network blip (socket timeout)
-# can trigger Pyrogram's *own* internal Session.restart() retry loop; if that
-# retry ever touches the client's sqlite storage after something else has
-# already stopped it, every subsequent call on that client raises one of:
-#   - "Connection lost"                        (Connection/Session dead)
-#   - "Cannot operate on a closed database"     (storage closed underneath it)
-# Neither of those matched _is_broken_pipe(), so run_with_reconnect() used to
-# just re-raise immediately and leave the dead Client sitting in
-# telegram_clients — every future request reused the same broken client and
-# failed the same way forever, which is what "account won't open" looks like
-# from the outside. Treat these as reconnect-worthy too.
-def _is_connection_dead(e):
-    msg = str(e)
-    return (
-        _is_broken_pipe(e)
-        or "Connection lost" in msg
-        or "closed database" in msg
-        or "Not connected" in msg
-    )
-
 async def clear_client(session_string):
-    """Stop and drop a session's Client. Always goes through the same
-    per-session creation lock as get_client() so teardown never races a
-    concurrent get_client()/force_reconnect() for the same session_string —
-    without this, one code path could delete telegram_clients[session_string]
-    out from under another coroutine that just started using it."""
-    lock = _get_client_creation_lock(session_string)
-    async with lock:
-        if session_string in telegram_clients:
-            try:
-                await telegram_clients[session_string].stop()
-            except Exception:
-                pass
-            del telegram_clients[session_string]
+    if session_string in telegram_clients:
+        try:
+            await telegram_clients[session_string].stop()
+        except Exception:
+            pass
+        del telegram_clients[session_string]
 
 # get_client() used to have a check-then-act race: it checked
 # `session_string not in telegram_clients`, then awaited `client.start()`
@@ -1715,7 +1641,7 @@ async def run_with_reconnect(session_string, coro_factory):
                                f"(flood attempt {flood_attempts}/3)")
                 await asyncio.sleep(wait_s)
                 continue
-            if _is_connection_dead(e) and not broken_pipe_retried:
+            if _is_broken_pipe(e) and not broken_pipe_retried:
                 broken_pipe_retried = True
                 continue
             raise
@@ -3091,14 +3017,13 @@ def download_media_route(chat_id, message_id):
                     yield chunk
             except Exception as e:
                 logger.error(f"Stream error: {e}")
-                if _is_connection_dead(e) or "Session" in str(e):
-                    # Route through clear_client() (per-session lock) instead
-                    # of stopping/deleting inline — doing it inline here raced
-                    # get_client()/force_reconnect() for the same session_string
-                    # from other requests, which is exactly the kind of race
-                    # that produces "Cannot operate on a closed database"
-                    # cascades from Pyrogram's own internal reconnect tasks.
-                    await clear_client(session_str)
+                if "Broken pipe" in str(e) or "Session" in str(e):
+                    if session_str in telegram_clients:
+                        try:
+                            await telegram_clients[session_str].stop()
+                        except Exception:
+                            pass
+                        del telegram_clients[session_str]
 
         def stream_wrapper():
             import queue
