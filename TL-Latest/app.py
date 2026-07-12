@@ -1961,7 +1961,20 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
         pass
 
     sk = session_string[:16]
-    # Only cache standard (non-search, non-media-only, first page) requests
+    # Standard (non-search, non-media-only, first page) requests used to be
+    # cached for 2 minutes, invalidated only when a live update pushed a new
+    # message in and explicitly deleted this key (see log_message() handler).
+    # That invalidation depends on live_updates being ON *and* the running
+    # Client already reflecting that (toggling the flag doesn't affect an
+    # already-started Client — see live_updates reconnect handling in
+    # toggle_feature_flag()). Whenever push invalidation doesn't fire for any
+    # reason, a user hitting "refresh" (re-opening the chat, which calls this
+    # same endpoint) kept seeing the same stale snapshot for up to 2 minutes,
+    # which reads as "refresh does nothing". A manual refresh is an explicit
+    # ask for the current state, so it must always hit Telegram live instead
+    # of trusting push-based invalidation to have worked. Keep only a tiny
+    # dedupe window to absorb accidental rapid double-fires (e.g. a fast
+    # double click), not to serve minutes-old data.
     use_cache = (not query and not media_only and offset_id == 0)
     cache_key = f"msgs:{sk}:{chat_id}" if use_cache else None
     if cache_key:
@@ -2088,7 +2101,7 @@ async def get_messages_from_chat(session_string, chat_id, limit=100, offset_id=0
 
         result = await run_with_reconnect(session_string, _do)
         if cache_key and "error" not in result:
-            _api_cache.set(cache_key, result, ttl=120)  # 2 min
+            _api_cache.set(cache_key, result, ttl=5)  # short dedupe window only
         return result
     except Exception as e:
         logger.error(f"Error in get_messages_from_chat: {e}", exc_info=True)
@@ -3196,7 +3209,25 @@ def toggle_feature_flag(key):
     enabled = bool(data.get("enabled", True))
     try:
         set_feature_enabled(key, enabled)
-        return jsonify({"success": True, "key": key, "enabled": enabled})
+        reconnected = 0
+        if key == "live_updates":
+            # no_updates= is baked into the Pyrogram Client at construction
+            # time (see create_telegram_client()) — flipping the DB flag
+            # alone does nothing for a Client that's already running. Force
+            # every currently-connected session to reconnect right away so
+            # the new value actually takes effect instead of silently
+            # no-op'ing until the next full app restart.
+            async def _reconnect_all():
+                n = 0
+                for ss in list(telegram_clients.keys()):
+                    try:
+                        await get_client(ss, force_reconnect=True)
+                        n += 1
+                    except Exception as e:
+                        logger.warning(f"live_updates toggle: failed to reconnect a session: {e}")
+                return n
+            reconnected = run_async(_reconnect_all())
+        return jsonify({"success": True, "key": key, "enabled": enabled, "reconnected": reconnected})
     except Exception as e:
         logger.error(f"toggle_feature_flag error: {e}")
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
