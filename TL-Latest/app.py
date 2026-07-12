@@ -209,6 +209,53 @@ try:
     from pyrogram.errors import FloodWait as _FloodWait
 except ImportError:
     _FloodWait = None
+
+# ── Patch pyrofork Session.restart() to be concurrency-safe ──────────────────
+#
+# Root cause of:
+#   RuntimeError: read() called while another coroutine is already waiting
+#                 for incoming data
+#
+# When the TCP connection to Telegram drops, TWO independent tasks both call
+# self.loop.create_task(self.restart()) at the same moment:
+#
+#   session.py:329  recv_worker  → packet is None → create_task(self.restart())
+#   session.py:300  ping_worker  → OSError on write → create_task(self.restart())
+#
+# pyrofork's restart() has no lock:
+#
+#   async def restart(self):   # session.py:188
+#       await self.stop()      # line 189
+#       await self.start()     # line 190
+#
+# start() assigns self.connection = ConnectionFactory(...)  [session.py:114]
+# self.connection is a shared Session instance variable.
+# With two concurrent restart() coroutines running, their start() calls
+# interleave and can overwrite each other's self.connection, causing two
+# recv_worker tasks to read from the same asyncio.StreamReader.
+# asyncio.StreamReader._wait_for_data() [streams.py:529] raises RuntimeError
+# when its _waiter future is already set by a prior reader.
+#
+# Fix: make restart() acquire a per-session asyncio.Lock before proceeding.
+# If a restart is already in progress the second call silently returns —
+# the running restart will re-establish the session for both callers.
+
+import pyrogram.session.session as _pyro_session_module
+
+_orig_session_restart = _pyro_session_module.Session.restart
+
+async def _safe_session_restart(self):
+    lock = getattr(self, '_restart_lock', None)
+    if lock is None:
+        self._restart_lock = asyncio.Lock()
+        lock = self._restart_lock
+    if lock.locked():
+        return   # another restart already in progress — let it finish
+    async with lock:
+        await _orig_session_restart(self)
+
+_pyro_session_module.Session.restart = _safe_session_restart
+# ─────────────────────────────────────────────────────────────────────────────
 try:
     from pyrogram.errors import (
         ChannelPrivate as _ChannelPrivate,
