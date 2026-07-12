@@ -1514,7 +1514,23 @@ _protected_chats_mem: dict = {}    # session_key -> set[int] | None=unloaded
 _protected_chats_mem_lock = threading.Lock()
 
 def _get_protected_set(session_key: str) -> set:
-    """Return the set of protected chat_ids for session_key (loads from DB once)."""
+    """Return the set of protected chat_ids for session_key (loads from DB once).
+
+    IMPORTANT — thread-safety contract:
+    This function is safe to call from ANY thread (Flask request threads,
+    asyncio event loop thread, executor threads) because:
+      - The fast path (cache hit) only touches a threading.Lock + dict read.
+      - The slow path (cold cache) runs the SQLAlchemy query inside
+        app.app_context(), which is required for Flask-SQLAlchemy.
+
+    NEVER call this directly from an async function on the event loop thread
+    when the cache may be cold.  The synchronous SQLAlchemy query would block
+    the event loop, starve Pyrogram's ping_worker, and cause Telegram to
+    reset the TCP connection — manifesting as repeated asyncio WARNING
+    "socket.send() raised exception." (selector_events.py:write() fires when
+    _conn_lost >= LOG_THRESHOLD_FOR_CONNLOST_WRITES=5, asyncio/constants.py).
+    Use _prewarm_protected_cache() + run_in_executor() instead (see get_client).
+    """
     with _protected_chats_mem_lock:
         s = _protected_chats_mem.get(session_key)
         if s is not None:
@@ -1525,6 +1541,18 @@ def _get_protected_set(session_key: str) -> set:
     with _protected_chats_mem_lock:
         _protected_chats_mem[session_key] = result
     return result
+
+
+def _prewarm_protected_cache(session_key: str) -> None:
+    """Ensure the protected-chat cache is warm for session_key.
+
+    Designed to be called via loop.run_in_executor() BEFORE client.start()
+    so the cache is populated on a thread-pool thread rather than the
+    asyncio event loop thread.  After this returns, all future calls to
+    _get_protected_set() for this session_key are instant in-memory dict
+    lookups — no DB I/O, no event-loop blocking risk.
+    """
+    _get_protected_set(session_key)  # no-op if already warm
 
 # ── Translation cache — avoids re-hitting AI APIs for identical requests ──────
 _translation_cache: dict = {}      # (text_md5, target_lang) -> (translated, engine)
@@ -1680,17 +1708,57 @@ async def get_client(session_string, force_reconnect=False):
                 pass
             del telegram_clients[session_string]
         if session_string not in telegram_clients:
+            sk = session_string[:16]
+
+            # ── Pre-warm protected-chat cache (MUST happen before client.start) ──
+            #
+            # Root cause of "socket.send() raised exception." (asyncio WARNING):
+            #
+            # 1. asyncio/selector_events.py transport.write() logs this warning
+            #    when _conn_lost >= LOG_THRESHOLD_FOR_CONNLOST_WRITES (= 5,
+            #    from asyncio/constants.py) — i.e. after 5+ writes to a socket
+            #    that asyncio already knows is dead.
+            #
+            # 2. The socket dies because the event loop is blocked.  Pyrogram's
+            #    session.py ping_worker sends a keep-alive every PING_INTERVAL
+            #    seconds; if the loop is blocked it can't fire.  Telegram drops
+            #    the TCP connection server-side after missing pings, which sets
+            #    _conn_lost on the asyncio transport.  Queued writes from
+            #    Pyrogram's ACK sender then each increment _conn_lost; once ≥ 5
+            #    the asyncio WARNING starts firing.
+            #
+            # 3. The specific blocker: _patched_handle_updates() is registered
+            #    as the Pyrogram update handler and runs on the asyncio event
+            #    loop thread.  On the very first call per session_key it calls
+            #    _get_protected_set() whose cache is cold — a synchronous
+            #    SQLAlchemy query that blocks the loop thread.
+            #
+            # 4. This first call happens immediately on connect, during the
+            #    initial update burst.  pyrofork session.py START_TIMEOUT = 2 s:
+            #    if the loop is blocked longer than that, the initial Ping times
+            #    out, stop() is called, and the while-True loop retries with NO
+            #    sleep — a rapid reconnect storm, each cycle generating more
+            #    socket.send() warnings.
+            #
+            # Fix: run the cold-cache DB load in a thread-pool executor BEFORE
+            # client.start() so the event loop thread is never blocked during
+            # the session startup window.  All subsequent calls to
+            # _get_protected_set() within handlers are instant dict lookups.
+            # (Official Pyrogram FAQ: "blocking the event loop for too long"
+            #  is a documented cause of socket.send() / connection-lost errors.)
+            await asyncio.get_event_loop().run_in_executor(
+                None, _prewarm_protected_cache, sk
+            )
+
             client = create_telegram_client(session_string)
             await client.start()
-            # ── Stabilisation window ──────────────────────────────────────────
-            # On accounts with 1 000+ chats, Telegram pushes a massive initial
-            # update blob the moment the MTProto handshake completes.  If any
-            # API call (get_me, get_dialogs, …) writes to the socket while that
-            # burst is still being received, we get 4+ concurrent socket writes
-            # on the same connection, Telegram resets it, and every pending
-            # write fails simultaneously ("socket.send() raised exception" × N).
-            # Waiting here lets _patched_handle_updates() drain the queue and
-            # the connection reach a quiet state before we issue new requests.
+
+            # ── Hold the creation lock while recover_gaps runs ────────────────
+            # _patched_recover_gaps() fires immediately after client.start() for
+            # the 10 protected chats.  Holding the lock here (by delaying the
+            # telegram_clients assignment) prevents HTTP-route coroutines from
+            # making API calls during that window, reducing concurrent socket
+            # writes during the most sensitive period of the session lifecycle.
             await asyncio.sleep(2.0)
             telegram_clients[session_string] = client
     return telegram_clients[session_string]
