@@ -201,11 +201,21 @@ except RuntimeError:
     asyncio.set_event_loop(asyncio.new_event_loop())
 
 from pyrogram import Client, filters as pyro_filters
+from pyrogram import utils as _pyro_utils
 from pyrogram.raw import functions as _raw_functions, types as _raw_types
 try:
     from pyrogram.errors import FloodWait as _FloodWait
 except ImportError:
     _FloodWait = None
+try:
+    from pyrogram.errors import (
+        ChannelPrivate as _ChannelPrivate,
+        ChannelInvalid as _ChannelInvalid,
+        PersistentTimestampOutdated as _PersistentTimestampOutdated,
+        PersistentTimestampInvalid as _PersistentTimestampInvalid,
+    )
+except ImportError:
+    _ChannelPrivate = _ChannelInvalid = _PersistentTimestampOutdated = _PersistentTimestampInvalid = Exception
 
 app = Flask(__name__, static_folder='static', template_folder='templates')
 app.secret_key = os.environ.get("SESSION_SECRET") or os.environ.get("SECRET_KEY")
@@ -783,16 +793,288 @@ def create_telegram_client(session_string):
         # app's routes do. get_me / get_dialogs / on-demand get_messages calls
         # are unaffected. Controlled by the 'live_updates' feature flag.
         no_updates=not is_feature_enabled("live_updates"),
-        # sleep_threshold=0 makes Pyrogram raise FloodWait immediately instead
-        # of silently sleeping-and-retrying inside its own session layer. Its
-        # default (auto-retry for waits under ~10-30s) hides the error from us
-        # entirely — a stuck call keeps retrying forever with no timeout, no
-        # log we control, and no way for a feature flag or cancellation to
-        # reach it. Raising immediately lets our own bounded, jittered retry
-        # in run_with_reconnect() (and the timeouts on other call sites)
-        # actually be the one place flood handling happens.
-        sleep_threshold=0,
+        # sleep_threshold controls whether Pyrogram silently sleeps-and-retries
+        # a FloodWait inside its own session layer, vs raising immediately.
+        #
+        # This was previously 0 (always raise) so our own bounded, jittered
+        # retry in run_with_reconnect() would be the only place flood handling
+        # happens. But Pyrogram's *internal* live-update machinery — the
+        # per-channel catch-up in handle_updates()/recover_gaps(), which fires
+        # automatically when live_updates is on for accounts with many
+        # channels — calls updates.GetChannelDifference with no FloodWait
+        # handling of its own, relying entirely on the client's sleep_threshold
+        # to absorb short waits. With sleep_threshold=0, every one of those
+        # internal calls raised immediately, crashing the in-flight update task;
+        # Pyrogram then retried on the next queued update with no backoff,
+        # producing a tight loop of thousands of FloodWait/socket errors within
+        # seconds (observed with live_updates+auto_reconnect on a 100+ channel
+        # account).
+        #
+        # Raising this to 30 lets Pyrogram absorb those short (single/low
+        # double-digit second) internal catch-up waits by sleeping once per
+        # channel, exactly as it's designed to. It does NOT weaken our own
+        # explicit call sites: get_messages()/get_forum_topics*()/get_all_stories
+        # etc. hardcode sleep_threshold=-1 in Pyrogram itself (always raise,
+        # regardless of client config), and get_dialogs()/get_chat_history()
+        # hardcode sleep_threshold=60 — both ignore this client-level value.
+        # Only calls with no per-call override (the internal update recovery,
+        # plus our own raw client.invoke() admin calls) are affected.
+        sleep_threshold=30,
     )
+
+    # ── Restrict Pyrogram's own gap-recovery to preserved chats only ─────────
+    # On process start (or reconnect), Pyrogram's Client.recover_gaps() walks
+    # EVERY stored channel state and issues its own updates.GetChannelDifference
+    # to catch up. On an account with 100+ channels this fires all at once and
+    # floods Telegram (see sleep_threshold comment above) even with a sane
+    # sleep_threshold, because the sheer volume of concurrent per-channel
+    # catch-up calls congests the single MTProto connection.
+    #
+    # We only care about instant/live capture (view-once, protected-content
+    # auto-save) for a small, user-selected set of chats — the same chats the
+    # "🛡 Protect" toggle already tracks in ProtectedChat. So we replace
+    # recover_gaps() with a version that only does the real network catch-up
+    # for those chats (+ id==0, the single combined GetDifference call used
+    # for private chats/small groups, which is cheap — one call, not a
+    # per-channel storm). Every other channel's pending state is just marked
+    # caught-up locally (no network call) — those chats still receive live
+    # updates going forward, they just skip catching up on anything missed
+    # while the app was offline, which is fine since we don't auto-preserve
+    # media there anyway; the user refreshes them manually.
+    async def _patched_recover_gaps():
+        states = await client.storage.update_state()
+
+        message_updates_counter = 0
+        other_updates_counter = 0
+
+        if not states:
+            logger.info(f"[recover_gaps:{session_key}] No states found, skipping recovery.")
+            return (message_updates_counter, other_updates_counter)
+
+        preserved_ids = _get_protected_set(session_key)
+        skipped = 0
+
+        for state in states:
+            id, local_pts, _, local_date, _ = state
+
+            if id != 0 and id not in preserved_ids:
+                skipped += 1
+                await client.storage.update_state(id)
+                continue
+
+            prev_pts = 0
+
+            while True:
+                try:
+                    diff = await client.invoke(
+                        _raw_functions.updates.GetChannelDifference(
+                            channel=await client.resolve_peer(id),
+                            filter=_raw_types.ChannelMessagesFilterEmpty(),
+                            pts=local_pts,
+                            limit=10000,
+                            force=False
+                        ) if id < 0 else
+                        _raw_functions.updates.GetDifference(
+                            pts=local_pts,
+                            date=local_date,
+                            qts=0
+                        )
+                    )
+                except (_ChannelPrivate, _ChannelInvalid, _PersistentTimestampOutdated,
+                        _PersistentTimestampInvalid):
+                    break
+
+                if isinstance(diff, _raw_types.updates.DifferenceEmpty):
+                    break
+                elif isinstance(diff, _raw_types.updates.DifferenceTooLong):
+                    break
+                elif isinstance(diff, _raw_types.updates.Difference):
+                    local_pts = diff.state.pts
+                elif isinstance(diff, _raw_types.updates.DifferenceSlice):
+                    local_pts = diff.intermediate_state.pts
+                    local_date = diff.intermediate_state.date
+
+                    if prev_pts == local_pts:
+                        break
+
+                    prev_pts = local_pts
+                elif isinstance(diff, _raw_types.updates.ChannelDifferenceEmpty):
+                    break
+                elif isinstance(diff, _raw_types.updates.ChannelDifferenceTooLong):
+                    break
+                elif isinstance(diff, _raw_types.updates.ChannelDifference):
+                    local_pts = diff.pts
+
+                users = {i.id: i for i in diff.users}
+                chats = {i.id: i for i in diff.chats}
+
+                for message in diff.new_messages:
+                    message_updates_counter += 1
+                    client.dispatcher.updates_queue.put_nowait(
+                        (
+                            _raw_types.UpdateNewMessage(
+                                message=message,
+                                pts=local_pts,
+                                pts_count=-1
+                            ),
+                            users,
+                            chats
+                        )
+                    )
+
+                for update in diff.other_updates:
+                    other_updates_counter += 1
+                    client.dispatcher.updates_queue.put_nowait(
+                        (update, users, chats)
+                    )
+
+                if isinstance(diff, (_raw_types.updates.Difference, _raw_types.updates.ChannelDifference)):
+                    break
+
+            await client.storage.update_state(id)
+
+        logger.info(
+            f"[recover_gaps:{session_key}] Recovered {message_updates_counter} messages, "
+            f"{other_updates_counter} updates for {len(preserved_ids)} preserved chat(s); "
+            f"skipped catch-up (marked caught-up, no network call) for {skipped} other chat(s)."
+        )
+        return (message_updates_counter, other_updates_counter)
+
+    client.recover_gaps = _patched_recover_gaps
+
+    # ── Restrict the live is_min catch-up inside handle_updates() too ────────
+    # recover_gaps() only runs once at connect and only when skip_updates=False
+    # (Pyrogram defaults skip_updates=True, so it never actually ran here —
+    # the real per-channel storm source turned out to be THIS method instead).
+    # Every incoming update batch is parsed by Client.handle_updates(). When
+    # any user/chat referenced in the batch isn't yet in Pyrogram's local peer
+    # cache (is_min=True — very common right after reconnect, especially since
+    # this app uses in_memory=True sessions so the cache starts cold every
+    # restart), Pyrogram issues one additional updates.GetChannelDifference
+    # per UpdateNewChannelMessage in that batch to resolve it. Telegram
+    # delivers a burst of these for every channel with recent activity as soon
+    # as the persistent connection reconnects, so on a 100+ channel account
+    # this fires dozens of GetChannelDifference calls within the same instant
+    # and congests/flood-limits the single MTProto connection.
+    #
+    # This patched version is a straight copy of Pyrogram's handle_updates()
+    # with one added condition: only make that extra resolution call for
+    # channels in the preserved (🛡 Protect-toggled) set. Every other channel's
+    # message still gets queued and dispatched normally — it just keeps
+    # whatever (possibly partial) peer info Telegram already sent, instead of
+    # spending a network round-trip to fully resolve it. That's an acceptable
+    # trade for a chat we don't auto-preserve media in anyway.
+    async def _patched_handle_updates(updates):
+        client.last_update_time = datetime.now()
+
+        if isinstance(updates, (_raw_types.Updates, _raw_types.UpdatesCombined)):
+            is_min = any((
+                await client.fetch_peers(updates.users),
+                await client.fetch_peers(updates.chats),
+            ))
+
+            users = {u.id: u for u in updates.users}
+            chats = {c.id: c for c in updates.chats}
+
+            preserved_ids = _get_protected_set(session_key) if is_min else None
+
+            for update in updates.updates:
+                channel_id = getattr(
+                    getattr(
+                        getattr(
+                            update, "message", None
+                        ), "peer_id", None
+                    ), "channel_id", None
+                ) or getattr(update, "channel_id", None)
+
+                pts = getattr(update, "pts", None)
+                pts_count = getattr(update, "pts_count", None)
+
+                if pts:
+                    await client.storage.update_state(
+                        (
+                            _pyro_utils.get_channel_id(channel_id) if channel_id else 0,
+                            pts,
+                            None,
+                            updates.date,
+                            None
+                        )
+                    )
+
+                if isinstance(update, _raw_types.UpdateChannelTooLong):
+                    logger.info(f"[handle_updates:{session_key}] {update}")
+
+                is_preserved_channel = bool(
+                    channel_id and preserved_ids is not None
+                    and _pyro_utils.get_channel_id(channel_id) in preserved_ids
+                )
+
+                if (isinstance(update, _raw_types.UpdateNewChannelMessage) and is_min
+                        and is_preserved_channel):
+                    message = update.message
+
+                    if not isinstance(message, _raw_types.MessageEmpty):
+                        try:
+                            diff = await client.invoke(
+                                _raw_functions.updates.GetChannelDifference(
+                                    channel=await client.resolve_peer(_pyro_utils.get_channel_id(channel_id)),
+                                    filter=_raw_types.ChannelMessagesFilter(
+                                        ranges=[_raw_types.MessageRange(
+                                            min_id=update.message.id,
+                                            max_id=update.message.id
+                                        )]
+                                    ),
+                                    pts=pts - pts_count,
+                                    limit=pts,
+                                    force=False
+                                )
+                            )
+                        except (_ChannelPrivate, _PersistentTimestampOutdated, _PersistentTimestampInvalid):
+                            pass
+                        else:
+                            if not isinstance(diff, _raw_types.updates.ChannelDifferenceEmpty):
+                                users.update({u.id: u for u in diff.users})
+                                chats.update({c.id: c for c in diff.chats})
+
+                client.dispatcher.updates_queue.put_nowait((update, users, chats))
+        elif isinstance(updates, (_raw_types.UpdateShortMessage, _raw_types.UpdateShortChatMessage)):
+            await client.storage.update_state(
+                (
+                    0,
+                    updates.pts,
+                    None,
+                    updates.date,
+                    None
+                )
+            )
+
+            diff = await client.invoke(
+                _raw_functions.updates.GetDifference(
+                    pts=updates.pts - updates.pts_count,
+                    date=updates.date,
+                    qts=-1
+                )
+            )
+
+            if diff.new_messages:
+                client.dispatcher.updates_queue.put_nowait((
+                    _raw_types.UpdateNewMessage(
+                        message=diff.new_messages[0],
+                        pts=updates.pts,
+                        pts_count=updates.pts_count
+                    ),
+                    {u.id: u for u in diff.users},
+                    {c.id: c for c in diff.chats}
+                ))
+            else:
+                if diff.other_updates:  # The other_updates list can be empty
+                    client.dispatcher.updates_queue.put_nowait((diff.other_updates[0], {}, {}))
+        elif isinstance(updates, _raw_types.UpdateShort):
+            client.dispatcher.updates_queue.put_nowait((updates.update, {}, {}))
+        elif isinstance(updates, _raw_types.UpdatesTooLong):
+            logger.info(f"[handle_updates:{session_key}] {updates}")
+
+    client.handle_updates = _patched_handle_updates
 
     @client.on_message()
     async def log_message(c, m):
@@ -1288,19 +1570,45 @@ async def clear_client(session_string):
             pass
         del telegram_clients[session_string]
 
+# get_client() used to have a check-then-act race: it checked
+# `session_string not in telegram_clients`, then awaited `client.start()`
+# (which yields control back to the event loop for the MTProto handshake),
+# and only *after* that finished did it write the new Client into
+# telegram_clients. If two coroutines called get_client() for the same
+# session_string close together (e.g. the startup reconnect sweep racing a
+# browser request resuming the same session right after a restart), both
+# would see "not in telegram_clients" as True and each would construct and
+# start its own Client with the *same* auth key. Telegram detects that as
+# simultaneous use of one authorization key (AUTH_KEY_DUPLICATED) and starts
+# forcibly resetting connections, which we saw as a continuous cycle of
+# socket resets → reconnect → fresh is_min/GetChannelDifference catch-up →
+# FloodWait, even after gating the catch-up itself. A per-session asyncio.Lock
+# below serializes client creation so only one Client is ever started for a
+# given session_string at a time.
+_client_creation_locks = {}
+
+def _get_client_creation_lock(session_string):
+    lock = _client_creation_locks.get(session_string)
+    if lock is None:
+        lock = asyncio.Lock()
+        _client_creation_locks[session_string] = lock
+    return lock
+
 async def get_client(session_string, force_reconnect=False):
     if not session_string:
         return None
-    if force_reconnect and session_string in telegram_clients:
-        try:
-            await telegram_clients[session_string].stop()
-        except Exception:
-            pass
-        del telegram_clients[session_string]
-    if session_string not in telegram_clients:
-        client = create_telegram_client(session_string)
-        await client.start()
-        telegram_clients[session_string] = client
+    lock = _get_client_creation_lock(session_string)
+    async with lock:
+        if force_reconnect and session_string in telegram_clients:
+            try:
+                await telegram_clients[session_string].stop()
+            except Exception:
+                pass
+            del telegram_clients[session_string]
+        if session_string not in telegram_clients:
+            client = create_telegram_client(session_string)
+            await client.start()
+            telegram_clients[session_string] = client
     return telegram_clients[session_string]
 
 async def run_with_reconnect(session_string, coro_factory):
