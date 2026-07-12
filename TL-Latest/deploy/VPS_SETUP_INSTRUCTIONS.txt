@@ -124,6 +124,43 @@ nginx config test fails
      (not just the IP/domain on its own — "server_name" is required)
 
 =======================================================================
+ UPDATING THE APP (pulling in new code changes)
+=======================================================================
+/opt/tgviewer is NOT a git repository — setup.sh copies files there with
+rsync, it doesn't clone one. Running "git pull" directly inside it will
+fail with "not a git repository". Also, the GitHub repo has TL-Latest/
+as a subfolder, while /opt/tgviewer is a flat layout (app.py sits
+directly in it) — so even initializing git there wouldn't map cleanly.
+
+To update, clone fresh to a temp folder and rsync just the app files
+over, excluding anything with live data or secrets:
+
+  cd /tmp
+  git clone https://github.com/hanwant9684/TL.git tgviewer-update
+  sudo systemctl stop tgviewer
+  sudo rsync -a \
+    --exclude='.env' \
+    --exclude='instance/' \
+    --exclude='preserved_media/' \
+    --exclude='server_downloads/' \
+    --exclude='server_exports/' \
+    --exclude='thumbnail_cache/' \
+    --exclude='logs/' \
+    --exclude='*.db' \
+    /tmp/tgviewer-update/TL-Latest/ /opt/tgviewer/
+  sudo chown -R tgviewer:tgviewer /opt/tgviewer
+  sudo -u tgviewer /opt/tgviewer/.venv/bin/pip install --quiet -r /opt/tgviewer/requirements.txt
+  sudo systemctl start tgviewer
+  sudo systemctl status tgviewer
+  rm -rf /tmp/tgviewer-update
+
+The --exclude flags protect your .env (secrets), database, saved
+media, and logs from being touched — only the app code itself is
+replaced. Check for a clean startup with no repeating errors:
+
+  sudo journalctl -u tgviewer -f
+
+=======================================================================
  MOVING TO A NEW VPS / PRESERVING DATA
 =======================================================================
 Session strings, preserved media, and download history all live in
