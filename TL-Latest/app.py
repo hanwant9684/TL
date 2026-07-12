@@ -1192,13 +1192,18 @@ def create_telegram_client(session_string):
                                      m.text or m.caption or "", m.date)
         except Exception as e:
             logger.error(f"Error logging message: {e}")
-        # Invalidate caches so new messages appear immediately.
-        # Also wipe the dialog snapshot — new message may have moved a dialog
-        # to the top of the list.
+        # Invalidate per-chat message cache and account info so new messages
+        # appear immediately on next load.
+        # NOTE: do NOT invalidate the dialog snapshot here. The snapshot covers
+        # all 1000 dialogs and rebuilding it requires 10+ messages.GetDialogs
+        # calls to Telegram. On a busy account every incoming message wiped the
+        # snapshot, guaranteeing every scroll-to-load-more triggered a full
+        # re-fetch and hit Telegram's FloodWait (19–21 s observed). The snapshot
+        # has a 15-minute TTL (_DIALOG_SNAPSHOT_TTL) which is sufficient for
+        # chat-list ordering to stay reasonably fresh without hammering the API.
         try:
             chat_id = m.chat.id if m.chat else None
             if chat_id:
-                _invalidate_dialog_cache(session_key)
                 _api_cache.delete(f"msgs:{session_key}:{chat_id}")
                 _api_cache.delete(f"acct:{session_key}")
         except Exception:
