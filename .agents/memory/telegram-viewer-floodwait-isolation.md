@@ -134,3 +134,38 @@ found by reading Pyrogram's actual source rather than guessing from symptoms:
 and matters more than any update-gap tuning; a storm with no
 `AUTH_KEY_DUPLICATED` but heavy `is_min`-triggered `GetChannelDifference`
 volume right after reconnect is cause #1 (unscoped live catch-up).
+
+## Fourth cause: blocking preserved-media I/O on the shared event loop
+
+All Telegram sessions share one asyncio event loop/thread (`_loop` in
+`app.py`) that also drives every session's Pyrogram network I/O (ping,
+keepalive, socket read/write). Any synchronous (blocking) disk or DB call
+made inline from an `async` update handler running on that loop — not just
+per-channel catch-up volume — can starve Pyrogram's own keepalive task long
+enough for Telegram to reset the connection, producing a symptom that looks
+identical to a FloodWait storm (`socket.send() raised exception`,
+`Connection lost`, endless reconnect) but has nothing to do with update/catch
+-up volume: it reproduces even with only one protected/view-once chat and
+zero flood-worthy traffic, and toggling `live_updates` off "fixes" it only
+because it stops the handler from ever firing, not because the update volume
+was the problem.
+
+**Where it hid:** `_auto_preserve()`'s download-write (`open(...,'wb')`) and
+DB-persist (`db.session.add`/`commit`, plus a full-file `open(...,'rb').read()`
+fallback) ran inline in the coroutine. `log_message()` right next to it
+already offloaded its own (much smaller) DB write via
+`asyncio.to_thread(_log_message_sync, ...)` specifically to avoid this class
+of bug — `_auto_preserve()`'s file/DB I/O just never got the same treatment,
+and it handles much larger payloads (video files), making the stall far more
+likely to exceed Telegram's keepalive tolerance.
+
+**Fix applied:** wrap the blocking write (`_write_file_sync`) and the
+read+DB-persist step (`_persist_preserved_media_sync`) in
+`asyncio.to_thread(...)` from `_auto_preserve()`, exactly matching the
+existing `log_message`/`_log_message_sync` pattern.
+
+**How to apply generally:** in this app, any new code added to an
+`on_message`/`on_raw_update`/`on_raw_update`-style handler that does disk I/O,
+a DB commit, or any other blocking call must go through
+`asyncio.to_thread(...)` — never call it inline — because it runs on the one
+shared loop serving every session's live connection, not a per-session loop.

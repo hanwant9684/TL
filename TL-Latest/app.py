@@ -573,6 +573,80 @@ _PRESERVE_EXT = {
     "video_note": ".mp4", "document": ".bin",
 }
 
+def _write_file_sync(path, data):
+    """Blocking file write, always run via asyncio.to_thread() from async
+    callers. Preserved-media writes can be large (videos), and this function
+    used to be called inline from the shared Pyrogram event loop — see the
+    to_thread comment on _persist_preserved_media_sync for why that's unsafe."""
+    with open(path, 'wb') as fh:
+        fh.write(data)
+
+
+def _persist_preserved_media_sync(session_key, chat_id, message_id, downloaded,
+                                   raw_name, media_type, reason, saved_at, file_bytes):
+    """Blocking disk read + DB write for a preserved-media record. Must run via
+    asyncio.to_thread() from _auto_preserve(), never called inline.
+
+    _auto_preserve() runs as a Pyrogram update handler on the single shared
+    asyncio event loop that also drives every logged-in session's MTProto
+    connection (ping/keepalive, socket reads). Doing synchronous disk I/O
+    (open/read/write) or a SQLAlchemy commit inline here blocks that shared
+    loop for the duration of the call. For small text messages that's
+    negligible (see log_message's existing to_thread offload for the same
+    reason) but preserved media can be tens/hundreds of MB — long enough to
+    starve Pyrogram's own keepalive/ping task and read loop, which Telegram's
+    server sees as a stalled connection and resets, producing a
+    connect -> "Connection lost" -> reconnect loop that never settles as long
+    as live updates + a busy preserved/protected chat keep triggering more
+    downloads. Returns the file size on success, or None on failure.
+    """
+    try:
+        size = os.path.getsize(downloaded)
+        if file_bytes is None:
+            try:
+                with open(downloaded, 'rb') as fh:
+                    file_bytes = fh.read()
+            except Exception:
+                file_bytes = None
+        with app.app_context():
+            db.session.add(PreservedMedia(
+                session_key      = session_key,
+                chat_id          = chat_id,
+                message_id       = message_id,
+                file_path        = downloaded,
+                file_name        = raw_name,
+                file_size        = size,
+                media_type       = media_type,
+                reason           = reason,
+                saved_at         = saved_at or datetime.utcnow(),
+                original_deleted = False,
+                file_data        = file_bytes,
+            ))
+            db.session.commit()
+        return size
+    except Exception as dbe:
+        from sqlalchemy.exc import IntegrityError as _IntegrityError
+        if isinstance(dbe, _IntegrityError):
+            # Duplicate — another handler (on_message vs raw safety-net race)
+            # already saved this message. Treat as a successful no-op.
+            logger.debug(f"[preserve] duplicate insert ignored for msg {message_id} "
+                         f"(uq_preserved_media_identity) — already preserved")
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+            return -1  # sentinel: duplicate, not a real failure
+        else:
+            logger.error(f"[preserve] DB write failed msg {message_id}: {dbe}")
+            try:
+                with app.app_context():
+                    db.session.rollback()
+            except Exception:
+                pass
+            raise
+
+
 async def _auto_preserve(client, msg, session_key):
     """Download and record media that should be preserved (view-once or protected chat).
 
@@ -675,8 +749,7 @@ async def _auto_preserve(client, msg, session_key):
             )
             if data:
                 file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                with open(dest, 'wb') as fh:
-                    fh.write(file_bytes)
+                await asyncio.to_thread(_write_file_sync, dest, file_bytes)
                 downloaded = dest
                 logger.debug(f"[preserve] S2 (in_memory) success msg {msg.id}")
         except Exception as e2:
@@ -696,8 +769,7 @@ async def _auto_preserve(client, msg, session_key):
                 )
                 if data:
                     file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                    with open(dest, 'wb') as fh:
-                        fh.write(file_bytes)
+                    await asyncio.to_thread(_write_file_sync, dest, file_bytes)
                     downloaded = dest
                     logger.debug(f"[preserve] S3 (file_id) success msg {msg.id}")
             except Exception as e3:
@@ -713,47 +785,21 @@ async def _auto_preserve(client, msg, session_key):
         return
 
     # ── Persist to DB ─────────────────────────────────────────────────────────
+    # Offloaded to a worker thread — see _persist_preserved_media_sync's
+    # docstring for why running this inline on the shared event loop causes
+    # the live_updates "Connection lost" reconnect storm on busy/preserved
+    # chats (blocking disk + DB I/O starves Pyrogram's own keepalive task).
     try:
-        size = os.path.getsize(downloaded)
-        if file_bytes is None:
-            try:
-                with open(downloaded, 'rb') as fh:
-                    file_bytes = fh.read()
-            except Exception:
-                file_bytes = None
-        with app.app_context():
-            db.session.add(PreservedMedia(
-                session_key      = session_key,
-                chat_id          = chat_id,
-                message_id       = msg.id,
-                file_path        = downloaded,
-                file_name        = raw_name,
-                file_size        = size,
-                media_type       = media_type,
-                reason           = reason,
-                saved_at         = msg.date or datetime.utcnow(),
-                original_deleted = False,
-                file_data        = file_bytes,
-            ))
-            db.session.commit()
-        logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
-    except Exception as dbe:
-        from sqlalchemy.exc import IntegrityError as _IntegrityError
-        if isinstance(dbe, _IntegrityError):
-            # Duplicate — another handler (on_message vs raw safety-net race)
-            # already saved this message.  Treat as a successful no-op.
-            logger.debug(f"[preserve] duplicate insert ignored for msg {msg.id} "
-                         f"(uq_preserved_media_identity) — already preserved")
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
+        size = await asyncio.to_thread(
+            _persist_preserved_media_sync, session_key, chat_id, msg.id,
+            downloaded, raw_name, media_type, reason, msg.date, file_bytes
+        )
+        if size == -1:
+            pass  # duplicate, already logged inside the helper
         else:
-            logger.error(f"[preserve] DB write failed msg {msg.id}: {dbe}")
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
+            logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
+    except Exception:
+        pass  # already logged inside _persist_preserved_media_sync
 
 
 def _log_message_sync(message_id, chat_id, user_id, text, date):
