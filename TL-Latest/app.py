@@ -137,29 +137,7 @@ _MEDIA_EXT_MAP = {
     "video_note": ".mp4", "document": "",
 }
 
-LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - [%(session_tag)s] - %(message)s'
-
-# ── Per-session log tagging ───────────────────────────────────────────────
-# All of Pyrogram's own internal loggers (session/connection/tcp) are plain
-# module-level loggers with no per-client identity, so when multiple accounts
-# run concurrently (e.g. 3 sessions), a warning like "socket.send() raised
-# exception." gives zero clue which account's connection is actually broken.
-# We tag every log record with the session that's "active" in the current
-# asyncio task via a ContextVar. It's set once, right before a client is
-# created/started (see create_telegram_client()); Pyrogram's own background
-# tasks (PingTask, NetworkTask, HandlerTasks) are all created via
-# asyncio.create_task() from within that same task afterwards, and task
-# creation captures a snapshot of the current context, so the tag propagates
-# to them automatically without touching Pyrogram's source.
-import contextvars as _contextvars
-_session_log_ctx = _contextvars.ContextVar("session_log_ctx", default="-")
-
-class _SessionTagFilter(logging.Filter):
-    def filter(self, record):
-        record.session_tag = _session_log_ctx.get()
-        return True
-
-_session_tag_filter = _SessionTagFilter()
+LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 
 # ── Rotating file handler — writes to logs/app.log, keeps last 5 × 5 MB ──────
 import os as _os
@@ -189,21 +167,8 @@ if _file_handler not in _root_logger.handlers:
 if not any(isinstance(h, logging.StreamHandler) and not isinstance(h, _RotatingFileHandler)
            for h in _root_logger.handlers):
     _root_logger.addHandler(logging.StreamHandler())
-# Attach the session tag filter to every HANDLER (not the root logger itself)
-# so it applies to records regardless of which logger originated them —
-# logger-level filters only run for that specific logger, not for records
-# just propagating up to the root's handlers.
-for _h in _root_logger.handlers:
-    _h.addFilter(_session_tag_filter)
 logger = logging.getLogger(__name__)
-# Bumped from WARNING to INFO: Pyrogram's own connection/session loggers log
-# useful, low-volume diagnostic lines at INFO ("Connecting...", "Connected!
-# ... DCx", "Disconnected", "Send exception: <real OSError>", "Session
-# started/stopped") that were previously invisible. None of these fire per
-# message (that's DEBUG), so this does not add meaningful log volume — but it
-# turns a bare "socket.send() raised exception." into an entry with the real
-# underlying error and DC, tagged with the account via session_tag above.
-logging.getLogger("pyrogram").setLevel(logging.INFO)
+logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("werkzeug").setLevel(logging.WARNING)
 
 # ── In-memory log buffer (last 500 entries) — readable from /api/logs ─────────
@@ -815,21 +780,6 @@ def _log_message_sync(message_id, chat_id, user_id, text, date):
 
 def create_telegram_client(session_string):
     session_key = session_string[:16]
-
-    # Tag this task (and every child task Pyrogram spawns from it — PingTask,
-    # NetworkTask, HandlerTasks, all created via asyncio.create_task() further
-    # down the call stack) with a human-readable label for this session, so
-    # log lines like Pyrogram's "Send exception: ..." / "socket.send() raised
-    # exception." can be traced back to a specific account instead of being
-    # anonymous. Best-effort: falls back to the raw session_key if the label
-    # lookup fails for any reason (no DB/app context available yet, etc.) —
-    # this must never block client creation.
-    try:
-        _row = StoredSession.query.filter_by(session_key=session_key).first()
-        _session_log_ctx.set(_row.label if _row and _row.label else session_key)
-    except Exception:
-        _session_log_ctx.set(session_key)
-
     client = Client(
         name=f"session_{hash(session_string)}",
         session_string=session_string,
