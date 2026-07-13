@@ -622,6 +622,87 @@ _PRESERVE_EXT = {
     "video_note": ".mp4", "document": ".bin",
 }
 
+# ── Sync helpers — called via asyncio.to_thread() from async handlers ─────────
+# These run DB queries and file I/O without blocking the event loop.
+
+def _check_preserved_sync(session_key, chat_id, message_id):
+    """Return True if a PreservedMedia row already exists for this message."""
+    with app.app_context():
+        return bool(PreservedMedia.query.filter_by(
+            session_key=session_key, chat_id=chat_id, message_id=message_id
+        ).first())
+
+
+def _write_bytes_sync(dest, file_bytes):
+    """Write *file_bytes* to *dest* on disk."""
+    with open(dest, 'wb') as fh:
+        fh.write(file_bytes)
+
+
+def _persist_preserved_sync(session_key, chat_id, msg_id, downloaded,
+                             raw_name, file_bytes, media_type, reason, saved_at):
+    """Stat the file, optionally read its bytes, then INSERT a PreservedMedia row.
+
+    Returns:
+        (True,  info_log_msg)   — successfully saved
+        (None,  debug_log_msg)  — duplicate, safely ignored
+        (False, error_log_msg)  — unexpected DB error
+    """
+    from sqlalchemy.exc import IntegrityError as _IntegrityError
+    size = os.path.getsize(downloaded)
+    if file_bytes is None:
+        try:
+            with open(downloaded, 'rb') as fh:
+                file_bytes = fh.read()
+        except Exception:
+            file_bytes = None
+    with app.app_context():
+        try:
+            db.session.add(PreservedMedia(
+                session_key      = session_key,
+                chat_id          = chat_id,
+                message_id       = msg_id,
+                file_path        = downloaded,
+                file_name        = raw_name,
+                file_size        = size,
+                media_type       = media_type,
+                reason           = reason,
+                saved_at         = saved_at,
+                original_deleted = False,
+                file_data        = file_bytes,
+            ))
+            db.session.commit()
+            return True, (f"[preserve] saved [{reason}] {raw_name} "
+                          f"({format_file_size(size)})")
+        except _IntegrityError:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return None, (f"[preserve] duplicate insert ignored for msg {msg_id} "
+                          f"(uq_preserved_media_identity) — already preserved")
+        except Exception as dbe:
+            try:
+                db.session.rollback()
+            except Exception:
+                pass
+            return False, f"[preserve] DB write failed msg {msg_id}: {dbe}"
+
+
+def _mark_deleted_sync(session_key, msg_ids):
+    """Mark PreservedMedia rows as originally-deleted. Returns the count updated."""
+    with app.app_context():
+        rows = PreservedMedia.query.filter(
+            PreservedMedia.session_key == session_key,
+            PreservedMedia.message_id.in_(msg_ids)
+        ).all()
+        for row in rows:
+            row.original_deleted = True
+        if rows:
+            db.session.commit()
+        return len(rows)
+
+
 async def _auto_preserve(client, msg, session_key):
     """Download and record media that should be preserved (view-once or protected chat).
 
@@ -684,11 +765,8 @@ async def _auto_preserve(client, msg, session_key):
         return
 
     # ── Duplicate guard ───────────────────────────────────────────────────────
-    with app.app_context():
-        if PreservedMedia.query.filter_by(
-            session_key=session_key, chat_id=chat_id, message_id=msg.id
-        ).first():
-            return
+    if await asyncio.to_thread(_check_preserved_sync, session_key, chat_id, msg.id):
+        return
 
     reason   = "view_once" if is_view_once else "protected"
     raw_name = (getattr(media_obj, 'file_name', None) if media_obj else None)
@@ -724,8 +802,7 @@ async def _auto_preserve(client, msg, session_key):
             )
             if data:
                 file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                with open(dest, 'wb') as fh:
-                    fh.write(file_bytes)
+                await asyncio.to_thread(_write_bytes_sync, dest, file_bytes)
                 downloaded = dest
                 logger.debug(f"[preserve] S2 (in_memory) success msg {msg.id}")
         except Exception as e2:
@@ -745,8 +822,7 @@ async def _auto_preserve(client, msg, session_key):
                 )
                 if data:
                     file_bytes = data.getvalue() if hasattr(data, 'getvalue') else bytes(data)
-                    with open(dest, 'wb') as fh:
-                        fh.write(file_bytes)
+                    await asyncio.to_thread(_write_bytes_sync, dest, file_bytes)
                     downloaded = dest
                     logger.debug(f"[preserve] S3 (file_id) success msg {msg.id}")
             except Exception as e3:
@@ -762,47 +838,17 @@ async def _auto_preserve(client, msg, session_key):
         return
 
     # ── Persist to DB ─────────────────────────────────────────────────────────
-    try:
-        size = os.path.getsize(downloaded)
-        if file_bytes is None:
-            try:
-                with open(downloaded, 'rb') as fh:
-                    file_bytes = fh.read()
-            except Exception:
-                file_bytes = None
-        with app.app_context():
-            db.session.add(PreservedMedia(
-                session_key      = session_key,
-                chat_id          = chat_id,
-                message_id       = msg.id,
-                file_path        = downloaded,
-                file_name        = raw_name,
-                file_size        = size,
-                media_type       = media_type,
-                reason           = reason,
-                saved_at         = msg.date or datetime.utcnow(),
-                original_deleted = False,
-                file_data        = file_bytes,
-            ))
-            db.session.commit()
-        logger.info(f"[preserve] saved [{reason}] {raw_name} ({format_file_size(size)})")
-    except Exception as dbe:
-        from sqlalchemy.exc import IntegrityError as _IntegrityError
-        if isinstance(dbe, _IntegrityError):
-            # Duplicate — another handler (on_message vs raw safety-net race)
-            # already saved this message.  Treat as a successful no-op.
-            logger.debug(f"[preserve] duplicate insert ignored for msg {msg.id} "
-                         f"(uq_preserved_media_identity) — already preserved")
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
-        else:
-            logger.error(f"[preserve] DB write failed msg {msg.id}: {dbe}")
-            try:
-                db.session.rollback()
-            except Exception:
-                pass
+    ok, log_msg = await asyncio.to_thread(
+        _persist_preserved_sync,
+        session_key, chat_id, msg.id, downloaded, raw_name,
+        file_bytes, media_type, reason, msg.date or datetime.utcnow(),
+    )
+    if ok is True:
+        logger.info(log_msg)
+    elif ok is None:
+        logger.debug(log_msg)
+    else:
+        logger.error(log_msg)
 
 
 def _log_message_sync(message_id, chat_id, user_id, text, date):
@@ -1316,12 +1362,9 @@ def create_telegram_client(session_string):
             already_saved = False
             for _attempt in range(8):           # 8 × 0.5 s = 4 s total
                 await asyncio.sleep(0.5)
-                with app.app_context():
-                    already_saved = bool(PreservedMedia.query.filter_by(
-                        session_key=session_key,
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                    ).first())
+                already_saved = await asyncio.to_thread(
+                    _check_preserved_sync, session_key, chat_id, msg_id
+                )
                 if already_saved:
                     logger.debug(f"[raw_preserve] msg {msg_id} preserved by on_message after "
                                  f"{(_attempt+1)*0.5:.1f}s")
@@ -1351,16 +1394,9 @@ def create_telegram_client(session_string):
     async def on_deleted(c, messages):
         try:
             msg_ids = [m.id for m in messages]
-            with app.app_context():
-                rows = PreservedMedia.query.filter(
-                    PreservedMedia.session_key == session_key,
-                    PreservedMedia.message_id.in_(msg_ids)
-                ).all()
-                for row in rows:
-                    row.original_deleted = True
-                if rows:
-                    db.session.commit()
-                    logger.info(f"Marked {len(rows)} preserved media as originally deleted")
+            count = await asyncio.to_thread(_mark_deleted_sync, session_key, msg_ids)
+            if count:
+                logger.info(f"Marked {count} preserved media as originally deleted")
         except Exception as e:
             logger.error(f"on_deleted error: {e}")
 
