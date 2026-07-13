@@ -703,6 +703,44 @@ def _mark_deleted_sync(session_key, msg_ids):
         return len(rows)
 
 
+def _persist_download_sync(download_id, sk, chat_id, msg_id, file_name, file_size, dest):
+    """Upsert a ServerDownload completion record — runs off the event loop."""
+    with app.app_context():
+        existing = ServerDownload.query.filter_by(download_id=download_id).first()
+        if existing:
+            existing.file_name = file_name
+            existing.file_size = file_size
+            existing.file_data = None   # never store blob — disk file is enough
+            existing.file_path = dest
+            existing.status    = "done"
+        else:
+            db.session.add(ServerDownload(
+                download_id = download_id,
+                session_key = sk,
+                chat_id     = int(chat_id),
+                message_id  = int(msg_id),
+                file_name   = file_name,
+                file_size   = file_size,
+                file_data   = None,     # never store blob — disk file is enough
+                file_path   = dest,
+                status      = "done",
+            ))
+        db.session.commit()
+
+
+def _get_preserved_media_bytes_sync(sk, peer_id, message_id):
+    """Return the stored file_data bytes for a view-once PreservedMedia row, or None."""
+    with app.app_context():
+        pm = PreservedMedia.query.filter_by(
+            session_key=sk,
+            chat_id=peer_id,
+            message_id=int(message_id),
+        ).first()
+        if pm and pm.file_data:
+            return pm.file_data
+        return None
+
+
 async def _auto_preserve(client, msg, session_key):
     """Download and record media that should be preserved (view-once or protected chat).
 
@@ -1203,7 +1241,8 @@ def create_telegram_client(session_string):
 
     async def _patched_message_parser(update, users, chats):
         chat_id = _chat_id_from_raw_message(getattr(update, "message", None))
-        replies = 1 if (chat_id is not None and chat_id in _get_protected_set(session_key)) else 0
+        _protected = await asyncio.to_thread(_get_protected_set, session_key)
+        replies = 1 if (chat_id is not None and chat_id in _protected) else 0
         return (
             await _pyro_types.Message._parse(
                 client, update.message, users, chats,
@@ -1279,7 +1318,7 @@ def create_telegram_client(session_string):
             chat_id = m.chat.id if m.chat else None
             if not chat_id:
                 return
-            is_protected = chat_id in _get_protected_set(session_key)
+            is_protected = chat_id in (await asyncio.to_thread(_get_protected_set, session_key))
             is_view_once = False
             if not is_protected and m.media:
                 media_type = m.media.value
@@ -1423,8 +1462,14 @@ def api_login_required(f):
 _loop = asyncio.new_event_loop()
 threading.Thread(target=_loop.run_forever, daemon=True).start()
 
-def run_async(coro):
-    return asyncio.run_coroutine_threadsafe(coro, _loop).result()
+def run_async(coro, timeout=90):
+    """Submit *coro* to the shared event loop and block until it completes.
+
+    *timeout* (seconds, default 90) is passed to concurrent.futures.Future.result()
+    so a hung coroutine surfaces as TimeoutError instead of blocking the Flask
+    thread (and eventually the whole process) forever.
+    """
+    return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=timeout)
 
 # ── Clean shutdown on SIGTERM / SIGINT ────────────────────────────────────────
 # When the Replit workflow manager kills this process (SIGTERM), Pyrogram
@@ -2042,34 +2087,12 @@ async def _download_to_server(download_id, session_str, chat_id, msg_id):
                 entry["status"] = "done"
                 # Persist metadata to DB — no file_data blob, disk file is the source of truth
                 try:
-                    with app.app_context():
-                        existing = ServerDownload.query.filter_by(download_id=download_id).first()
-                        if existing:
-                            existing.file_name = file_name
-                            existing.file_size = file_size
-                            existing.file_data = None   # never store blob — disk file is enough
-                            existing.file_path = dest
-                            existing.status    = "done"
-                        else:
-                            db.session.add(ServerDownload(
-                                download_id = download_id,
-                                session_key = sk,
-                                chat_id     = int(chat_id),
-                                message_id  = int(msg_id),
-                                file_name   = file_name,
-                                file_size   = file_size,
-                                file_data   = None,     # never store blob — disk file is enough
-                                file_path   = dest,
-                                status      = "done",
-                            ))
-                        db.session.commit()
+                    await asyncio.to_thread(
+                        _persist_download_sync,
+                        download_id, sk, chat_id, msg_id, file_name, file_size, dest,
+                    )
                     logger.info(f"Download {download_id} persisted to DB ({format_file_size(file_size)}): {file_name}")
                 except Exception as db_err:
-                    # Roll back so this session isn't left in a dirty/broken
-                    # state for the next DB operation on this thread — without
-                    # this, one transient failure here could cascade into
-                    # unrelated later queries failing too.
-                    db.session.rollback()
                     logger.warning(f"Could not persist download {download_id} to DB: {db_err}")
             else:
                 entry["status"] = "failed"
@@ -2528,14 +2551,11 @@ def media_thumb(chat_id, message_id):
                         # the preserved copy from DB if we saved it earlier.
                         sk = session_str[:16] if session_str else None
                         if sk:
-                            with app.app_context():
-                                pm = PreservedMedia.query.filter_by(
-                                    session_key=sk,
-                                    chat_id=peer_id,
-                                    message_id=int(message_id),
-                                ).first()
-                                if pm and pm.file_data:
-                                    return pm.file_data, "image/jpeg", None
+                            pm_data = await asyncio.to_thread(
+                                _get_preserved_media_bytes_sync, sk, peer_id, message_id
+                            )
+                            if pm_data is not None:
+                                return pm_data, "image/jpeg", None
                         return None, None, "NO_MEDIA"
                     thumbs = getattr(obj, "thumbs", None)
                     if thumbs:
