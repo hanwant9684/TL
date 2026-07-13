@@ -1563,8 +1563,19 @@ _DIALOG_SNAPSHOT_TTL = 900         # 15 min
 
 # In-flight guard: prevents concurrent requests from all firing a full
 # get_dialogs() scan simultaneously when the snapshot is cold.  The first
-# request that finds no snapshot sets its Future here; others wait on it.
-_dialog_fetch_inflight: dict = {}  # session_key -> concurrent.futures.Future
+# request that finds no snapshot creates an entry here; others await the
+# asyncio.Event inside it.
+#
+# WHY asyncio.Event and NOT concurrent.futures.Future:
+# get_dialogs_list() is an async function that runs on the shared asyncio
+# event loop.  Calling concurrent.futures.Future.result() from an async
+# function blocks the ENTIRE event loop for the wait duration — Pyrogram's
+# ping_worker can no longer send keepalives, Telegram drops the TCP
+# connection, and the asyncio "socket.send() raised exception." storm
+# begins.  asyncio.Event.wait() is a proper coroutine: it suspends only
+# the waiting coroutine and yields control back to the event loop so pings
+# and other work can continue uninterrupted.
+_dialog_fetch_inflight: dict = {}  # session_key -> {"event": asyncio.Event, "result": list}
 _dialog_fetch_inflight_lock = threading.Lock()
 
 def _invalidate_dialog_cache(session_key: str):
@@ -2063,16 +2074,21 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
 
         # Check/register in-flight guard
         with _dialog_fetch_inflight_lock:
-            fut = _dialog_fetch_inflight.get(session_key)
-            is_owner = fut is None
+            inflight = _dialog_fetch_inflight.get(session_key)
+            is_owner = inflight is None
             if is_owner:
-                fut = concurrent.futures.Future()
-                _dialog_fetch_inflight[session_key] = fut
+                inflight = {"event": asyncio.Event(), "result": []}
+                _dialog_fetch_inflight[session_key] = inflight
 
         if not is_owner:
-            # Another coroutine is already fetching — wait for it, then slice
+            # Another coroutine is already fetching — await the asyncio.Event
+            # so the event loop stays free (pings continue, connection lives).
+            # concurrent.futures.Future.result() must NEVER be called here —
+            # it blocks the entire event loop, starves Pyrogram's ping_worker,
+            # and causes Telegram to drop the TCP connection.
             try:
-                all_dialogs = fut.result(timeout=120)
+                await asyncio.wait_for(inflight["event"].wait(), timeout=120)
+                all_dialogs = inflight.get("result") or []
             except Exception:
                 all_dialogs = []
             return all_dialogs[offset:offset + limit]
@@ -2113,16 +2129,19 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
                 }
             with _dialog_fetch_inflight_lock:
                 if session_key in _dialog_fetch_inflight:
-                    _dialog_fetch_inflight[session_key].set_result(all_dialogs)
+                    _dialog_fetch_inflight[session_key]["result"] = all_dialogs
+                    _dialog_fetch_inflight[session_key]["event"].set()
                     del _dialog_fetch_inflight[session_key]
 
         return all_dialogs[offset:offset + limit]
     except Exception as exc:
         if session_key:
             with _dialog_fetch_inflight_lock:
-                f = _dialog_fetch_inflight.pop(session_key, None)
-            if f:
-                f.set_exception(exc)
+                inflight_err = _dialog_fetch_inflight.pop(session_key, None)
+            if inflight_err:
+                # Wake any waiting coroutines so they don't hang for 120 s.
+                # They'll read an empty result list and return gracefully.
+                inflight_err["event"].set()
         raise
 
 async def get_account_info(session_string):
