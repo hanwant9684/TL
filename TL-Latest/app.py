@@ -3535,6 +3535,90 @@ def list_preserved():
         for pm in items
     ]})
 
+@app.route("/api/preserved/download-zip")
+@login_required
+def download_preserved_zip():
+    """Zip every preserved-media file for this session (or a single chat) and
+    stream it back as a download.  Files are read from disk when available and
+    fall back to the DB blob column when the disk copy is missing."""
+    import io, zipfile
+    s  = session.get("session_string", "")
+    sk = s[:16]
+    chat_filter = request.args.get("chat_id")
+    q = PreservedMedia.query.filter_by(session_key=sk)
+    if chat_filter:
+        try:
+            q = q.filter_by(chat_id=int(chat_filter))
+        except ValueError:
+            pass
+    items = q.order_by(PreservedMedia.saved_at.desc()).all()
+
+    # Only include items that actually have data
+    available = [pm for pm in items
+                 if (pm.file_path and os.path.exists(pm.file_path)) or pm.file_data]
+    if not available:
+        return jsonify({"error": "No files available to download"}), 404
+
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        seen: dict[str, int] = {}
+        for pm in available:
+            base_name = pm.file_name or f"file_{pm.id}"
+            # Deduplicate arc names so nothing gets silently overwritten
+            if base_name in seen:
+                seen[base_name] += 1
+                dot = base_name.rfind(".")
+                if dot != -1:
+                    arc_name = f"{base_name[:dot]}_{seen[base_name]}{base_name[dot:]}"
+                else:
+                    arc_name = f"{base_name}_{seen[base_name]}"
+            else:
+                seen[base_name] = 0
+                arc_name = base_name
+
+            try:
+                if pm.file_path and os.path.exists(pm.file_path):
+                    zf.write(pm.file_path, arc_name)
+                elif pm.file_data:
+                    zf.writestr(arc_name, pm.file_data)
+            except Exception as e:
+                logger.warning(f"[zip] skipped {arc_name}: {e}")
+
+    buf.seek(0)
+    zip_name = f"preserved_media_{sk}.zip"
+    return send_file(buf, as_attachment=True,
+                     download_name=zip_name, mimetype="application/zip")
+
+
+@app.route("/api/preserved", methods=["DELETE"])
+@api_login_required
+def clear_all_preserved():
+    """Delete all preserved-media records (and their disk files) for this session.
+    Pass ?chat_id=<id> to restrict to one chat only."""
+    s  = session.get("session_string", "")
+    sk = s[:16]
+    chat_filter = request.args.get("chat_id")
+    q = PreservedMedia.query.filter_by(session_key=sk)
+    if chat_filter:
+        try:
+            q = q.filter_by(chat_id=int(chat_filter))
+        except (ValueError, TypeError):
+            pass
+    items = q.all()
+    deleted = 0
+    for pm in items:
+        if pm.file_path and os.path.exists(pm.file_path):
+            try:
+                os.remove(pm.file_path)
+            except Exception:
+                pass
+        pm.file_data = None      # release DB blob before delete
+        db.session.delete(pm)
+        deleted += 1
+    db.session.commit()
+    return jsonify({"success": True, "deleted": deleted})
+
+
 @app.route("/api/preserved/<int:item_id>/download")
 @login_required
 def download_preserved(item_id):

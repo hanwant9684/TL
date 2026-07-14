@@ -569,10 +569,12 @@
     <div class="modal" style="max-width:680px;width:96%;">
         <div class="modal-hd">
             <h3>🛡 Preserved Media</h3>
-            <div style="display:flex;gap:8px;align-items:center;">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
                 <select id="preserved-chat-filter" class="tb-select" onchange="refreshPreserved()" title="Filter by chat">
                     <option value="">All chats</option>
                 </select>
+                <button class="ph-dl-btn" onclick="downloadPreservedZip()" title="Download all visible files as a ZIP archive">⬇ ZIP</button>
+                <button class="ph-dl-btn" onclick="clearAllPreserved()" title="Permanently delete all preserved files shown" style="background:rgba(220,50,50,0.15);color:var(--red,#e05252);">🗑 Clear all</button>
                 <button class="icon-btn" onclick="refreshPreserved()" title="Refresh">↻</button>
                 <button onclick="closePreserved()" class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
             </div>
@@ -2216,6 +2218,35 @@ async function deletePreserved(id) {
         const row = document.getElementById(`prow-${id}`);
         if (row) row.remove();
         showToast('Preserved file removed');
+    } catch { showToast('Request failed', 'error'); }
+}
+
+function downloadPreservedZip() {
+    const filter = document.getElementById('preserved-chat-filter').value;
+    const url = '/api/preserved/download-zip' + (filter ? `?chat_id=${encodeURIComponent(filter)}` : '');
+    // Use a hidden anchor so the browser triggers a download without leaving the page
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+}
+
+async function clearAllPreserved() {
+    const filter = document.getElementById('preserved-chat-filter').value;
+    const scope  = filter ? 'all preserved files in this chat' : 'ALL preserved files';
+    if (!confirm(`Permanently delete ${scope}? This cannot be undone.`)) return;
+    try {
+        const url = '/api/preserved' + (filter ? `?chat_id=${encodeURIComponent(filter)}` : '');
+        const r = await fetch(url, { method: 'DELETE' });
+        if (r.status === 401) { handleAuthExpired(); return; }
+        if (!r.ok) { showToast('Failed to clear', 'error'); return; }
+        const data = await r.json();
+        showToast(`Removed ${data.deleted} file${data.deleted !== 1 ? 's' : ''}`);
+        // Reset chat filter and re-render the (now empty) list
+        if (!filter) document.getElementById('preserved-chat-filter').innerHTML = '<option value="">All chats</option>';
+        refreshPreserved();
     } catch { showToast('Request failed', 'error'); }
 }
 
