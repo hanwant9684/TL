@@ -1940,7 +1940,8 @@ async function doForward(toChatId) {
         const data = await r.json();
         if (data.success) {
             const n = data.count ?? ids.length;
-            showToast(`${n} message${n !== 1 ? 's' : ''} forwarded ✓`);
+            const verb = data.copied ? 'copied' : 'forwarded';
+            showToast(`${n} message${n !== 1 ? 's' : ''} ${verb} ✓`);
         } else {
             showToast(data.error || 'Forward failed', 'error');
         }

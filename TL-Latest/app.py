@@ -3300,14 +3300,42 @@ def forward_message_route():
                     mids = [int(raw_ids)]
             except (TypeError, ValueError):
                 raise ValueError("chat_id / message_id must be integers")
-            msgs = await client.forward_messages(
-                chat_id=dst,
-                from_chat_id=src,
-                message_ids=mids,
-            )
-            forwarded = msgs if isinstance(msgs, list) else [msgs]
-            return {"success": True, "count": len(forwarded),
-                    "forwarded_ids": [m.id for m in forwarded if m]}
+
+            copied = False
+            try:
+                msgs = await client.forward_messages(
+                    chat_id=dst,
+                    from_chat_id=src,
+                    message_ids=mids,
+                )
+                forwarded = msgs if isinstance(msgs, list) else [msgs]
+            except Exception as fwd_err:
+                err_str = str(fwd_err)
+                if "CHAT_FORWARDS_RESTRICTED" not in err_str and "FORWARDS_RESTRICTED" not in err_str:
+                    raise  # re-raise unrelated errors immediately
+                # Fallback: copy each message individually (no "Forwarded from" header,
+                # but works even when the source chat restricts forwarding)
+                logger.info(f"[forward] forward restricted — falling back to copy_message for {len(mids)} msg(s)")
+                forwarded = []
+                for mid in mids:
+                    try:
+                        m = await client.copy_message(
+                            chat_id=dst,
+                            from_chat_id=src,
+                            message_id=mid,
+                        )
+                        if m:
+                            forwarded.append(m)
+                    except Exception as copy_err:
+                        logger.warning(f"[forward] copy_message failed for {mid}: {copy_err}")
+                copied = True
+
+            return {
+                "success": True,
+                "count": len(forwarded),
+                "copied": copied,   # lets the UI show a different toast
+                "forwarded_ids": [m.id for m in forwarded if m],
+            }
         return await run_with_reconnect(session_str, _do)
 
     try:
