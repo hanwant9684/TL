@@ -3277,30 +3277,37 @@ def send_message_route():
 @app.route("/api/forward-message", methods=["POST"])
 @api_login_required
 def forward_message_route():
-    """Forward one message from the currently open chat to any destination chat."""
+    """Forward one or more messages from the currently open chat to any destination chat.
+    Accepts either message_id (int) or message_ids (list of int)."""
     data = request.json or {}
     from_chat_id = data.get("from_chat_id")
-    message_id   = data.get("message_id")
     to_chat_id   = data.get("to_chat_id")
     session_str  = session.get("session_string")
-    if not all([from_chat_id, message_id, to_chat_id, session_str]):
+
+    # Accept both singular and plural forms
+    raw_ids = data.get("message_ids") or data.get("message_id")
+    if not all([from_chat_id, raw_ids, to_chat_id, session_str]):
         return jsonify({"error": "Missing params", "code": "BAD_REQUEST"}), 400
 
     async def task():
         async def _do(client):
             try:
-                src  = int(from_chat_id)
-                dst  = int(to_chat_id)
-                mid  = int(message_id)
+                src = int(from_chat_id)
+                dst = int(to_chat_id)
+                if isinstance(raw_ids, list):
+                    mids = [int(x) for x in raw_ids]
+                else:
+                    mids = [int(raw_ids)]
             except (TypeError, ValueError):
                 raise ValueError("chat_id / message_id must be integers")
             msgs = await client.forward_messages(
                 chat_id=dst,
                 from_chat_id=src,
-                message_ids=mid,
+                message_ids=mids,
             )
             forwarded = msgs if isinstance(msgs, list) else [msgs]
-            return {"success": True, "forwarded_ids": [m.id for m in forwarded if m]}
+            return {"success": True, "count": len(forwarded),
+                    "forwarded_ids": [m.id for m in forwarded if m]}
         return await run_with_reconnect(session_str, _do)
 
     try:

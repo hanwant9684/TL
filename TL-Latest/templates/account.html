@@ -475,6 +475,7 @@
                 <button id="protect-btn" class="tb-btn" onclick="toggleProtection()" title="Protect this chat — auto-save all incoming media" style="display:none;">🛡 Protect</button>
                 <button id="dl-multi-btn" class="tb-btn hidden" onclick="downloadSelected()">⬇ Download (<span id="sel-count">0</span>)</button>
                 <button id="save-multi-btn" class="tb-btn green hidden" onclick="saveSelected()">💾 Save (<span id="sel-count2">0</span>)</button>
+                <button id="fwd-multi-btn" class="tb-btn hidden" onclick="forwardSelected()" title="Forward selected messages to another chat">⤴ Forward (<span id="sel-count3">0</span>)</button>
                 <button id="tray-btn" class="tb-btn hidden" onclick="toggleTray()">📥 <span id="tray-count">0</span></button>
             </div>
 
@@ -1741,8 +1742,10 @@ function updateSelCount() {
     const n = selectedMedia.size;
     document.getElementById('sel-count').textContent = n;
     document.getElementById('sel-count2').textContent = n;
+    document.getElementById('sel-count3').textContent = n;
     document.getElementById('dl-multi-btn').classList.toggle('hidden', n === 0);
     document.getElementById('save-multi-btn').classList.toggle('hidden', n === 0);
+    document.getElementById('fwd-multi-btn').classList.toggle('hidden', n === 0);
 }
 
 function selectAllMedia() {
@@ -1849,11 +1852,12 @@ async function translateAll() {
 }
 
 // ── Forward ──
-let _fwdMsgId = null;
+// _fwdMsgIds holds an array of message IDs to forward (one or many)
+let _fwdMsgIds = [];
 let _fwdAllDialogs = [];
 
-async function openForwardModal(msgId) {
-    _fwdMsgId = msgId;
+async function _openForwardModalWithIds(ids) {
+    _fwdMsgIds = ids;
     document.getElementById('forward-modal').style.display = 'flex';
     document.getElementById('forward-search').value = '';
     const list = document.getElementById('forward-chat-list');
@@ -1870,14 +1874,29 @@ async function openForwardModal(msgId) {
             return;
         }
     }
+
+    // Update modal title to reflect count
+    const titleEl = document.querySelector('#forward-modal .modal-hd h3');
+    if (titleEl) titleEl.textContent = ids.length > 1 ? `⤴ Forward ${ids.length} messages to…` : '⤴ Forward to…';
+
     renderForwardChats(_fwdAllDialogs);
-    // Focus search box after paint
     requestAnimationFrame(() => document.getElementById('forward-search').focus());
+}
+
+// Single-message forward (called from per-message button)
+async function openForwardModal(msgId) {
+    await _openForwardModalWithIds([msgId]);
+}
+
+// Bulk forward (called from the selection toolbar)
+async function forwardSelected() {
+    if (selectedMedia.size === 0) return;
+    await _openForwardModalWithIds(Array.from(selectedMedia));
 }
 
 function closeForwardModal() {
     document.getElementById('forward-modal').style.display = 'none';
-    _fwdMsgId = null;
+    _fwdMsgIds = [];
 }
 
 function filterForwardChats(q) {
@@ -1904,7 +1923,8 @@ function renderForwardChats(dialogs) {
 }
 
 async function doForward(toChatId) {
-    if (!_fwdMsgId || !currentChatId) return;
+    if (!_fwdMsgIds.length || !currentChatId) return;
+    const ids = [..._fwdMsgIds];
     closeForwardModal();
     try {
         const r = await fetch('/api/forward-message', {
@@ -1912,14 +1932,15 @@ async function doForward(toChatId) {
             headers: {'Content-Type': 'application/json'},
             body: JSON.stringify({
                 from_chat_id: currentChatId,
-                message_id:   _fwdMsgId,
+                message_ids:  ids,
                 to_chat_id:   toChatId,
             })
         });
         if (r.status === 401) { handleAuthExpired(); return; }
         const data = await r.json();
         if (data.success) {
-            showToast('Message forwarded ✓');
+            const n = data.count ?? ids.length;
+            showToast(`${n} message${n !== 1 ? 's' : ''} forwarded ✓`);
         } else {
             showToast(data.error || 'Forward failed', 'error');
         }
