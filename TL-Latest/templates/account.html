@@ -157,6 +157,9 @@
         .action-btn{background:none;border:none;color:var(--text-muted);font-size:0.72rem;cursor:pointer;padding:2px 5px;border-radius:3px;}
         .action-btn:hover{color:var(--accent);background:rgba(82,136,193,0.1);}
         .action-btn.del:hover{color:var(--red);}
+        .fwd-chat-row{display:flex;flex-direction:column;gap:2px;padding:9px 16px;cursor:pointer;transition:background 0.12s;}
+        .fwd-chat-row:hover{background:rgba(82,136,193,0.1);}
+        .fwd-chat-name{font-size:0.9rem;font-weight:500;color:var(--text);}
 
         .history-end{text-align:center;color:var(--text-muted);font-size:0.78rem;padding:12px 0;display:flex;align-items:center;gap:10px;}
         .history-end::before,.history-end::after{content:'';flex:1;border-top:1px solid var(--border);}
@@ -1475,11 +1478,12 @@ function buildBubbleHTML(msg) {
             </div>`;
         }
     }
-    const deleteBtn = currentChatManage ? `<button class="action-btn del" onclick="deleteMsg(${msg.id})">Delete</button>` : '';
+    const deleteBtn    = currentChatManage ? `<button class="action-btn del" onclick="deleteMsg(${msg.id})">Delete</button>` : '';
     const translateBtn = msg.text ? `<button class="action-btn" onclick="translateMsg(${msg.id},this)">Translate</button>` : '';
+    const forwardBtn   = `<button class="action-btn" onclick="openForwardModal(${msg.id})" title="Forward this message to another chat">⤴ Forward</button>`;
     return `${senderLine}${fwdLine}${viewOnceLine}${textLine}${mediaHtml}
         <div class="msg-meta">
-            ${translateBtn}${deleteBtn}
+            ${translateBtn}${forwardBtn}${deleteBtn}
             <span class="msg-time">${formatTime(msg.date)}</span>
         </div>`;
 }
@@ -1842,6 +1846,84 @@ async function translateAll() {
         } catch(e) { break; }
         if (i < bubbles.length - 1) await new Promise(res => setTimeout(res, 2100));
     }
+}
+
+// ── Forward ──
+let _fwdMsgId = null;
+let _fwdAllDialogs = [];
+
+async function openForwardModal(msgId) {
+    _fwdMsgId = msgId;
+    document.getElementById('forward-modal').style.display = 'flex';
+    document.getElementById('forward-search').value = '';
+    const list = document.getElementById('forward-chat-list');
+
+    if (_fwdAllDialogs.length === 0) {
+        list.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:24px 0;">Loading…</p>';
+        try {
+            const r = await fetch('/api/dialogs?offset=0');
+            if (r.status === 401) { handleAuthExpired(); return; }
+            const d = await r.json();
+            _fwdAllDialogs = d.dialogs || [];
+        } catch(e) {
+            list.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:24px 0;">Failed to load chats</p>';
+            return;
+        }
+    }
+    renderForwardChats(_fwdAllDialogs);
+    // Focus search box after paint
+    requestAnimationFrame(() => document.getElementById('forward-search').focus());
+}
+
+function closeForwardModal() {
+    document.getElementById('forward-modal').style.display = 'none';
+    _fwdMsgId = null;
+}
+
+function filterForwardChats(q) {
+    const term = q.trim().toLowerCase();
+    const filtered = term
+        ? _fwdAllDialogs.filter(d => (d.name || d.title || '').toLowerCase().includes(term))
+        : _fwdAllDialogs;
+    renderForwardChats(filtered);
+}
+
+function renderForwardChats(dialogs) {
+    const list = document.getElementById('forward-chat-list');
+    if (!dialogs.length) {
+        list.innerHTML = '<p style="color:var(--text-muted);text-align:center;padding:16px 0;">No chats found</p>';
+        return;
+    }
+    list.innerHTML = dialogs.map(d => {
+        const name = esc(d.name || d.title || `Chat ${d.id}`);
+        const sub  = d.type ? `<span style="font-size:0.72rem;color:var(--text-muted);">${esc(d.type)}</span>` : '';
+        return `<div class="fwd-chat-row" onclick="doForward(${d.id})">
+            <span class="fwd-chat-name">${name}</span>${sub}
+        </div>`;
+    }).join('');
+}
+
+async function doForward(toChatId) {
+    if (!_fwdMsgId || !currentChatId) return;
+    closeForwardModal();
+    try {
+        const r = await fetch('/api/forward-message', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                from_chat_id: currentChatId,
+                message_id:   _fwdMsgId,
+                to_chat_id:   toChatId,
+            })
+        });
+        if (r.status === 401) { handleAuthExpired(); return; }
+        const data = await r.json();
+        if (data.success) {
+            showToast('Message forwarded ✓');
+        } else {
+            showToast(data.error || 'Forward failed', 'error');
+        }
+    } catch(e) { showToast('Request failed', 'error'); }
 }
 
 // ── Delete ──
@@ -2343,6 +2425,24 @@ async function clearThumbnailCache() {
     }
 }
 </script>
+
+<!-- Forward-message modal -->
+<div class="modal-overlay" id="forward-modal" onclick="if(event.target===this)closeForwardModal()">
+    <div class="modal" style="max-width:480px;width:96%;">
+        <div class="modal-hd">
+            <h3>⤴ Forward to…</h3>
+            <button onclick="closeForwardModal()" class="icon-btn"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M18 6L6 18M6 6l12 12"/></svg></button>
+        </div>
+        <div style="padding:10px 14px 6px;">
+            <input id="forward-search" class="search-input" type="text" placeholder="Search chats…"
+                   oninput="filterForwardChats(this.value)" autocomplete="off" style="width:100%;box-sizing:border-box;">
+        </div>
+        <div class="modal-body" id="forward-chat-list"
+             style="max-height:52vh;overflow-y:auto;padding:4px 0 10px;">
+            <p style="color:var(--text-muted);text-align:center;padding:24px 0;">Loading…</p>
+        </div>
+    </div>
+</div>
 
 <!-- Export progress panel -->
 <div id="export-panel">

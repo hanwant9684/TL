@@ -3274,6 +3274,42 @@ def send_message_route():
         logger.error(f"send_message error: {e}")
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
+@app.route("/api/forward-message", methods=["POST"])
+@api_login_required
+def forward_message_route():
+    """Forward one message from the currently open chat to any destination chat."""
+    data = request.json or {}
+    from_chat_id = data.get("from_chat_id")
+    message_id   = data.get("message_id")
+    to_chat_id   = data.get("to_chat_id")
+    session_str  = session.get("session_string")
+    if not all([from_chat_id, message_id, to_chat_id, session_str]):
+        return jsonify({"error": "Missing params", "code": "BAD_REQUEST"}), 400
+
+    async def task():
+        async def _do(client):
+            try:
+                src  = int(from_chat_id)
+                dst  = int(to_chat_id)
+                mid  = int(message_id)
+            except (TypeError, ValueError):
+                raise ValueError("chat_id / message_id must be integers")
+            msgs = await client.forward_messages(
+                chat_id=dst,
+                from_chat_id=src,
+                message_ids=mid,
+            )
+            forwarded = msgs if isinstance(msgs, list) else [msgs]
+            return {"success": True, "forwarded_ids": [m.id for m in forwarded if m]}
+        return await run_with_reconnect(session_str, _do)
+
+    try:
+        return jsonify(run_async(task()))
+    except Exception as e:
+        logger.error(f"forward_message error: {e}")
+        return jsonify({"error": str(e), "code": "INTERNAL"}), 500
+
+
 _MUTE_FOREVER = 2**31 - 1  # Telegram apps' convention for "mute forever"
 
 async def _set_notify_for_chat(client, chat_id, mute_until):
