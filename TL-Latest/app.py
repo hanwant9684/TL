@@ -2047,62 +2047,82 @@ async def run_with_reconnect(session_string, coro_factory):
 
 # ── Download (server-side) ────────────────────────────────────────────────────
 
+_dl_semaphores: dict = {}          # per-session asyncio.Semaphore (created lazily on the loop)
+_DL_MAX_CONCURRENT = 3             # max simultaneous Telegram downloads per account
+_DL_STAGGER_DELAY  = 0.6           # seconds to wait before starting each download
+                                   # — spreads burst queue starts, reduces FloodWait
+
 async def _download_to_server(download_id, session_str, chat_id, msg_id):
     entry = download_queue[download_id]
     sk = session_str[:16]
-    try:
-        entry["status"] = "downloading"
+
+    # Throttle: acquire per-session slot before touching Telegram.
+    # Semaphore is created here (on the event loop) the first time this session
+    # downloads anything, so it is always bound to the correct loop.
+    if sk not in _dl_semaphores:
+        _dl_semaphores[sk] = asyncio.Semaphore(_DL_MAX_CONCURRENT)
+    sem = _dl_semaphores[sk]
+
+    entry["status"] = "queued"
+    async with sem:
+        # Stagger start: spread burst queue entries so they don't all hit
+        # Telegram simultaneously (0.6 s × slot position ≈ natural back-off).
+        await asyncio.sleep(_DL_STAGGER_DELAY)
+        # ── All Telegram I/O happens inside the semaphore so at most
+        #    _DL_MAX_CONCURRENT downloads run per session at any one time. ──
         try:
-            peer_id = int(chat_id)
-        except Exception:
-            peer_id = chat_id
+            entry["status"] = "downloading"
+            try:
+                peer_id = int(chat_id)
+            except Exception:
+                peer_id = chat_id
 
-        async def _do(client):
-            msg = await asyncio.wait_for(client.get_messages(peer_id, int(msg_id)), timeout=20)
-            if not msg or not msg.media:
-                entry["status"] = "failed"
-                entry["error"] = "No downloadable media"
-                return
-            media_obj = getattr(msg, msg.media.value, None)
-            file_name = getattr(media_obj, "file_name", None)
-            if not file_name:
-                ext = ".file"
-                if msg.photo:        ext = ".jpg"
-                elif msg.video:      ext = ".mp4"
-                elif msg.audio:      ext = ".mp3"
-                elif msg.voice:      ext = ".ogg"
-                elif msg.animation:  ext = ".mp4"
-                elif msg.sticker:    ext = ".webp"
-                elif msg.video_note: ext = ".mp4"
-                file_name = f"file_{msg_id}{ext}"
-            safe_name = f"{download_id}_{_sanitize_filename(file_name)}"
-            dest = os.path.join(DOWNLOADS_DIR, safe_name)
-            entry["filename"] = file_name
-            entry["safe_name"] = safe_name
-            await client.download_media(msg, file_name=dest)
-            if os.path.exists(dest):
-                file_size = os.path.getsize(dest)
-                entry["size"] = format_file_size(file_size)
-                entry["path"] = dest
-                entry["status"] = "done"
-                # Persist metadata to DB — no file_data blob, disk file is the source of truth
-                try:
-                    await asyncio.to_thread(
-                        _persist_download_sync,
-                        download_id, sk, chat_id, msg_id, file_name, file_size, dest,
-                    )
-                    logger.info(f"Download {download_id} persisted to DB ({format_file_size(file_size)}): {file_name}")
-                except Exception as db_err:
-                    logger.warning(f"Could not persist download {download_id} to DB: {db_err}")
-            else:
-                entry["status"] = "failed"
-                entry["error"] = "File not written"
+            async def _do(client):
+                msg = await asyncio.wait_for(client.get_messages(peer_id, int(msg_id)), timeout=20)
+                if not msg or not msg.media:
+                    entry["status"] = "failed"
+                    entry["error"] = "No downloadable media"
+                    return
+                media_obj = getattr(msg, msg.media.value, None)
+                file_name = getattr(media_obj, "file_name", None)
+                if not file_name:
+                    ext = ".file"
+                    if msg.photo:        ext = ".jpg"
+                    elif msg.video:      ext = ".mp4"
+                    elif msg.audio:      ext = ".mp3"
+                    elif msg.voice:      ext = ".ogg"
+                    elif msg.animation:  ext = ".mp4"
+                    elif msg.sticker:    ext = ".webp"
+                    elif msg.video_note: ext = ".mp4"
+                    file_name = f"file_{msg_id}{ext}"
+                safe_name = f"{download_id}_{_sanitize_filename(file_name)}"
+                dest = os.path.join(DOWNLOADS_DIR, safe_name)
+                entry["filename"] = file_name
+                entry["safe_name"] = safe_name
+                await client.download_media(msg, file_name=dest)
+                if os.path.exists(dest):
+                    file_size = os.path.getsize(dest)
+                    entry["size"] = format_file_size(file_size)
+                    entry["path"] = dest
+                    entry["status"] = "done"
+                    # Persist metadata to DB — no file_data blob, disk file is the source of truth
+                    try:
+                        await asyncio.to_thread(
+                            _persist_download_sync,
+                            download_id, sk, chat_id, msg_id, file_name, file_size, dest,
+                        )
+                        logger.info(f"Download {download_id} persisted to DB ({format_file_size(file_size)}): {file_name}")
+                    except Exception as db_err:
+                        logger.warning(f"Could not persist download {download_id} to DB: {db_err}")
+                else:
+                    entry["status"] = "failed"
+                    entry["error"] = "File not written"
 
-        await run_with_reconnect(session_str, _do)
-    except Exception as e:
-        logger.error(f"Server download error [{download_id}]: {e}")
-        entry["status"] = "failed"
-        entry["error"] = str(e)
+            await run_with_reconnect(session_str, _do)
+        except Exception as e:
+            logger.error(f"Server download error [{download_id}]: {e}")
+            entry["status"] = "failed"
+            entry["error"] = str(e)
 
 # ── Telegram data helpers ─────────────────────────────────────────────────────
 
@@ -2154,7 +2174,10 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
 
     try:
         # No valid snapshot and we are the owner — fetch ALL dialogs from Telegram.
+        # Sleep briefly every 50 dialogs so accounts with 500+ chats don't fire
+        # a sustained burst that triggers Telegram's per-account rate limiter.
         all_dialogs = []
+        _fetch_count = 0
         async for dialog in client.get_dialogs():
             all_dialogs.append({
                 "name": dialog.chat.title or dialog.chat.first_name or "Unknown",
@@ -2164,7 +2187,11 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
                 "is_group": dialog.chat.type.value in ["group", "supergroup"],
                 "can_manage": True,
                 "username": getattr(dialog.chat, "username", None) or "",
+                "type": dialog.chat.type.value if hasattr(dialog.chat, "type") else "",
             })
+            _fetch_count += 1
+            if _fetch_count % 50 == 0:
+                await asyncio.sleep(0.3)   # yield + rate-limit pause every 50 dialogs
 
         if session_key:
             # Pre-fill chat info cache from dialog data so the first openChat()
