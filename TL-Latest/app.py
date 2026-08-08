@@ -2179,15 +2179,28 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
         all_dialogs = []
         _fetch_count = 0
         async for dialog in client.get_dialogs():
+            # Telegram can occasionally return a dialog whose peer could not be
+            # resolved (deleted/migrated chat, stale session state, or a
+            # transient Pyrogram parse result).  Do not let one malformed
+            # dialog abort the entire account load.
+            chat = getattr(dialog, "chat", None)
+            chat_id = getattr(chat, "id", None)
+            if chat is None or chat_id is None:
+                logger.warning(
+                    "[dialogs] skipping dialog with missing chat for session %s",
+                    session_key or "unknown",
+                )
+                continue
+            chat_type = getattr(getattr(chat, "type", None), "value", "")
             all_dialogs.append({
-                "name": dialog.chat.title or dialog.chat.first_name or "Unknown",
-                "id": dialog.chat.id,
-                "unread_count": dialog.unread_messages_count,
-                "is_channel": dialog.chat.type.value == "channel",
-                "is_group": dialog.chat.type.value in ["group", "supergroup"],
+                "name": getattr(chat, "title", None) or getattr(chat, "first_name", None) or "Unknown",
+                "id": chat_id,
+                "unread_count": getattr(dialog, "unread_messages_count", 0) or 0,
+                "is_channel": chat_type == "channel",
+                "is_group": chat_type in ["group", "supergroup"],
                 "can_manage": True,
-                "username": getattr(dialog.chat, "username", None) or "",
-                "type": dialog.chat.type.value if hasattr(dialog.chat, "type") else "",
+                "username": getattr(chat, "username", None) or "",
+                "type": chat_type,
             })
             _fetch_count += 1
             if _fetch_count % 50 == 0:
@@ -2238,16 +2251,35 @@ async def get_account_info(session_string):
         return cached
     try:
         async def _do(client):
-            me = await client.get_me()
+            # A just-started/reconnected Pyrogram client can occasionally
+            # return None while Telegram has not finished resolving the
+            # authorization identity.  Retry once instead of failing later
+            # with the opaque "'NoneType' object has no attribute 'id'".
+            me = None
+            for me_attempt in range(2):
+                me = await client.get_me()
+                if me is not None:
+                    break
+                if me_attempt == 0:
+                    logger.warning("[account:%s] Telegram returned no identity; retrying get_me()", sk)
+                    await asyncio.sleep(1.0)
+            if me is None:
+                raise RuntimeError(
+                    "Telegram did not return an account identity. "
+                    "The session may be revoked or temporarily unavailable; "
+                    "try reconnecting it."
+                )
+
             # Parallelize profile photo download + dialog fetch — both are
             # independent of each other after get_me() resolves.
             # Use small_file_id: the sidebar avatar renders at 38×38 px; the
             # big photo (640×640) wastes bandwidth and a Telegram call quota slot.
             async def _get_photo():
-                if not me.photo:
+                photo = getattr(me, "photo", None)
+                if not photo:
                     return None
                 try:
-                    data = await client.download_media(me.photo.small_file_id, in_memory=True)
+                    data = await client.download_media(photo.small_file_id, in_memory=True)
                     if data:
                         return base64.b64encode(data.getvalue()).decode('utf-8')
                 except Exception:
@@ -2273,6 +2305,7 @@ async def get_account_info(session_string):
             _api_cache.set(cache_key, result, ttl=1800)  # 30 min
         return result
     except Exception as e:
+        logger.exception(f"Error getting account info for session {sk}")
         return {"error": str(e)}
 
 DOWNLOADABLE_MEDIA = {"photo", "video", "document", "audio", "voice", "animation", "video_note", "sticker"}
