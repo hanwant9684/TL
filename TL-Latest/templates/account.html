@@ -725,16 +725,29 @@ function _removeDialogSkeletons() {
 async function loadMoreDialogs() {
     if (loadingDialogs || !hasMoreDialogs) return;
     loadingDialogs = true;
+    const marker = document.getElementById('loading-more');
+    marker.style.display = 'none';
+    marker.onclick = null;
     _showDialogSkeletons(6);
     try {
         const r = await fetch(`/api/dialogs?offset=${dialogOffset}`);
         if (r.status === 401) { handleAuthExpired(); return; }
-        if (!r.ok) { hasMoreDialogs = false; return; }
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            _removeDialogSkeletons();
+            marker.textContent = 'Could not load chats. Tap here to retry.';
+            marker.style.display = 'block';
+            marker.style.cursor = 'pointer';
+            marker.onclick = () => loadMoreDialogs();
+            showToast(err.error || 'Could not load more chats', 'error');
+            return;
+        }
         const data = await r.json();
         _removeDialogSkeletons();
+        marker.style.cursor = '';
+        marker.style.display = 'none';
         if (data.dialogs && data.dialogs.length > 0) {
             const list = document.getElementById('dialogs-list');
-            const marker = document.getElementById('loading-more');
             // Batch all new chat rows into one DocumentFragment so the browser
             // performs a single layout/paint instead of one per row — this is
             // what makes appending up to 100 chats at once feel smooth.
@@ -752,7 +765,14 @@ async function loadMoreDialogs() {
             dialogOffset += data.dialogs.length;
             hasMoreDialogs = data.has_more_dialogs;
         } else { hasMoreDialogs = false; }
-    } catch(e) { console.error(e); _removeDialogSkeletons(); }
+    } catch(e) {
+        console.error(e);
+        _removeDialogSkeletons();
+        marker.textContent = 'Could not load chats. Tap here to retry.';
+        marker.style.display = 'block';
+        marker.style.cursor = 'pointer';
+        marker.onclick = () => loadMoreDialogs();
+    }
     finally {
         loadingDialogs = false;
     }
