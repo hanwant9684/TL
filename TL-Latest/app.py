@@ -41,13 +41,14 @@ _AI_SYSTEM_PROMPT = (
 def _try_groq(text, target_name):
     key = os.environ.get("GROQ_API_KEY", "").strip()
     if not key:
+        logger.warning("[translation] Groq skipped: GROQ_API_KEY is not configured")
         return None
     try:
         resp = _http.post(
             "https://api.groq.com/openai/v1/chat/completions",
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             json={
-                "model": "llama-3.1-8b-instant",
+                "model": "openai/gpt-oss-20b",
                 "messages": [
                     {"role": "system", "content": _AI_SYSTEM_PROMPT},
                     {"role": "user", "content": f"Translate to {target_name}:\n{text}"}
@@ -60,30 +61,35 @@ def _try_groq(text, target_name):
         if resp.status_code == 200:
             result = resp.json()["choices"][0]["message"]["content"].strip()
             return result if result else None
-        if resp.status_code in (429, 503):
-            return None
-    except Exception:
-        pass
+        logger.warning(
+            "[translation] Groq model openai/gpt-oss-20b returned HTTP %s",
+            resp.status_code,
+        )
+    except Exception as exc:
+        # Do not log exception text: request diagnostics can include URLs or
+        # provider details. The exception class is enough to identify transport
+        # versus response-parsing failures without exposing secrets or content.
+        logger.warning("[translation] Groq request failed (%s)", type(exc).__name__)
     return None
 
 def _try_gemini(text, target_name):
     key = os.environ.get("GEMINI_API_KEY", "").strip()
     if not key:
+        logger.warning("[translation] Gemini skipped: GEMINI_API_KEY is not configured")
         return None
     prompt = f"{_AI_SYSTEM_PROMPT}\n\nTranslate to {target_name}:\n{text}"
     payload = {"contents": [{"parts": [{"text": prompt}]}]}
     headers = {"Content-Type": "application/json"}
-    for model in ("gemini-2.0-flash", "gemini-2.0-flash-lite"):
+    for model in ("gemini-3.8-flash", "gemini-3.6-flash"):
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{model}:generateContent?key={key}")
         try:
             resp = _http.post(url, json=payload, headers=headers, timeout=20)
             if resp.status_code == 200:
                 return resp.json()["candidates"][0]["content"]["parts"][0]["text"].strip()
-            if resp.status_code in (429, 503):
-                continue
-        except Exception:
-            pass
+            logger.warning("[translation] Gemini model %s returned HTTP %s", model, resp.status_code)
+        except Exception as exc:
+            logger.warning("[translation] Gemini request for %s failed (%s)", model, type(exc).__name__)
     return None
 
 def _try_google_translate(text, target_lang):
@@ -98,8 +104,10 @@ def _try_google_translate(text, target_lang):
             result = "".join(part[0] for part in data[0] if part[0])
             if result and result.lower().strip() != text.lower().strip():
                 return result
-    except Exception:
-        pass
+        else:
+            logger.warning("[translation] Google Translate returned HTTP %s", resp.status_code)
+    except Exception as exc:
+        logger.warning("[translation] Google Translate request failed (%s)", type(exc).__name__)
     return None
 
 def translate_with_fallback(text, target_lang, target_name):
@@ -1668,6 +1676,143 @@ def _invalidate_dialog_cache(session_key: str):
 def _is_peer_invalid(e) -> bool:
     return "PEER_ID_INVALID" in str(e)
 
+async def _iter_dialog_chats(client):
+    """Yield (chat, unread_count) without Pyrofork's unsafe Dialog dereferences.
+
+    Pyrofork's Client.get_dialogs() parses the full response and then
+    unconditionally reads ``last.top_message.id`` and ``last.chat.id`` to
+    prepare the next page. A deleted or partially-resolved dialog can leave
+    either parsed value as None, aborting account loading and every later
+    pagination request with "'NoneType' object has no attribute 'id'".
+    Fetch raw pages instead, validate each chat independently, and advance
+    from the raw dialog's peer/message fields.
+    """
+    offset_date = 0
+    offset_id = 0
+    offset_peer = _raw_types.InputPeerEmpty()
+    seen_cursors = {(0, 0, 0)}
+
+    while True:
+        response = await client.invoke(
+            _raw_functions.messages.GetDialogs(
+                offset_date=offset_date,
+                offset_id=offset_id,
+                offset_peer=offset_peer,
+                limit=100,
+                hash=0,
+            ),
+            sleep_threshold=60,
+        )
+        users = {item.id: item for item in (getattr(response, "users", None) or [])}
+        chats = {item.id: item for item in (getattr(response, "chats", None) or [])}
+        raw_dialogs = [
+            item for item in (getattr(response, "dialogs", None) or [])
+            if isinstance(item, _raw_types.Dialog)
+        ]
+        if not raw_dialogs:
+            return
+
+        # Preserve Pyrogram's normal peer-cache behavior so subsequent
+        # get_chat_history()/get_chat() calls can resolve numeric chat IDs.
+        try:
+            await client.fetch_peers(list(users.values()))
+            await client.fetch_peers(list(chats.values()))
+        except Exception:
+            logger.debug("[dialogs] couldn't refresh the complete peer cache", exc_info=True)
+
+        raw_messages = getattr(response, "messages", None) or []
+        for raw_dialog in raw_dialogs:
+            peer = getattr(raw_dialog, "peer", None)
+            try:
+                if isinstance(peer, _raw_types.PeerUser):
+                    entity = users.get(peer.user_id)
+                elif isinstance(peer, _raw_types.PeerChat):
+                    entity = chats.get(peer.chat_id)
+                elif isinstance(peer, _raw_types.PeerChannel):
+                    entity = chats.get(peer.channel_id)
+                else:
+                    entity = None
+
+                if entity is None:
+                    logger.warning("[dialogs] skipping unresolved dialog peer")
+                    continue
+
+                chat = _pyro_types.Chat._parse_dialog(client, peer, users, chats)
+                if chat is None or getattr(chat, "id", None) is None:
+                    logger.warning("[dialogs] skipping dialog with missing parsed chat")
+                    continue
+                yield chat, getattr(raw_dialog, "unread_count", 0) or 0
+            except Exception as exc:
+                logger.warning("[dialogs] skipping malformed dialog: %s", exc)
+
+        # Compute the next cursor from raw API fields, not parsed objects.
+        last = raw_dialogs[-1]
+        last_peer = getattr(last, "peer", None)
+        try:
+            last_peer_id = _pyro_utils.get_peer_id(last_peer)
+        except Exception:
+            logger.warning("[dialogs] cannot advance past a dialog with an invalid peer")
+            return
+
+        last_message_id = getattr(last, "top_message", None)
+        if last_message_id is None:
+            logger.warning("[dialogs] cannot advance past a dialog without a top message")
+            return
+
+        next_date = 0
+        for raw_message in raw_messages:
+            if isinstance(raw_message, _raw_types.MessageEmpty):
+                continue
+            try:
+                if (
+                    raw_message.id == last_message_id
+                    and _pyro_utils.get_peer_id(raw_message.peer_id) == last_peer_id
+                ):
+                    next_date = int(raw_message.date)
+                    break
+            except (AttributeError, TypeError, ValueError):
+                continue
+
+        # Construct InputPeer from this response so even a dialog skipped
+        # above can be used as the cursor and won't permanently block later
+        # valid chats from being loaded.
+        if isinstance(last_peer, _raw_types.PeerUser):
+            user = users.get(last_peer.user_id)
+            if user is not None and getattr(user, "is_self", False):
+                next_peer = _raw_types.InputPeerSelf()
+            elif user is not None and getattr(user, "access_hash", None) is not None:
+                next_peer = _raw_types.InputPeerUser(
+                    user_id=last_peer.user_id, access_hash=user.access_hash
+                )
+            else:
+                next_peer = None
+        elif isinstance(last_peer, _raw_types.PeerChat):
+            next_peer = _raw_types.InputPeerChat(chat_id=last_peer.chat_id)
+        elif isinstance(last_peer, _raw_types.PeerChannel):
+            channel = chats.get(last_peer.channel_id)
+            if channel is not None and getattr(channel, "access_hash", None) is not None:
+                next_peer = _raw_types.InputPeerChannel(
+                    channel_id=last_peer.channel_id, access_hash=channel.access_hash
+                )
+            else:
+                next_peer = None
+        else:
+            next_peer = None
+
+        if next_peer is None:
+            try:
+                next_peer = await client.resolve_peer(last_peer_id)
+            except Exception:
+                logger.warning("[dialogs] cannot resolve pagination cursor peer")
+                return
+
+        cursor = (next_date, int(last_message_id), last_peer_id)
+        if cursor in seen_cursors:
+            logger.warning("[dialogs] Telegram returned a repeated pagination cursor; stopping scan")
+            return
+        seen_cursors.add(cursor)
+        offset_date, offset_id, offset_peer = next_date, int(last_message_id), next_peer
+
 async def _resync_peers(client, session_key=None):
     """Force a fresh get_dialogs() scan to re-resolve peer access hashes.
 
@@ -1685,7 +1830,7 @@ async def _resync_peers(client, session_key=None):
     try:
         if session_key:
             _invalidate_dialog_cache(session_key)
-        async for _ in client.get_dialogs():
+        async for _chat, _unread_count in _iter_dialog_chats(client):
             pass
     except Exception as exc:
         logger.warning(f"_resync_peers failed: {exc}")
@@ -2178,12 +2323,7 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
         # a sustained burst that triggers Telegram's per-account rate limiter.
         all_dialogs = []
         _fetch_count = 0
-        async for dialog in client.get_dialogs():
-            # Telegram can occasionally return a dialog whose peer could not be
-            # resolved (deleted/migrated chat, stale session state, or a
-            # transient Pyrogram parse result).  Do not let one malformed
-            # dialog abort the entire account load.
-            chat = getattr(dialog, "chat", None)
+        async for chat, unread_count in _iter_dialog_chats(client):
             chat_id = getattr(chat, "id", None)
             if chat is None or chat_id is None:
                 logger.warning(
@@ -2195,7 +2335,7 @@ async def get_dialogs_list(client, offset=0, limit=DIALOGS_PAGE_SIZE, session_ke
             all_dialogs.append({
                 "name": getattr(chat, "title", None) or getattr(chat, "first_name", None) or "Unknown",
                 "id": chat_id,
-                "unread_count": getattr(dialog, "unread_messages_count", 0) or 0,
+                "unread_count": unread_count,
                 "is_channel": chat_type == "channel",
                 "is_group": chat_type in ["group", "supergroup"],
                 "can_manage": True,
@@ -2835,7 +2975,12 @@ def get_messages_route(chat_id):
         ))
         return jsonify(result)
     except Exception as e:
-        logger.error(f"get_messages_route error: {e}")
+        logger.exception("get_messages_route error")
+        if isinstance(e, TimeoutError):
+            return jsonify({
+                "error": "Telegram took too long to return messages. Please try opening the chat again.",
+                "code": "TELEGRAM_TIMEOUT",
+            }), 504
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
 @app.route("/api/dialogs")
@@ -2856,7 +3001,12 @@ def get_dialogs_route():
     try:
         return jsonify(run_async(task()))
     except Exception as e:
-        logger.error(f"get_dialogs_route error: {e}")
+        logger.exception("get_dialogs_route error")
+        if isinstance(e, TimeoutError):
+            return jsonify({
+                "error": "Telegram took too long to return chats. Please try again.",
+                "code": "TELEGRAM_TIMEOUT",
+            }), 504
         return jsonify({"error": str(e), "code": "INTERNAL"}), 500
 
 @app.route("/api/sessions")
@@ -3865,7 +4015,15 @@ def view_account():
                 "This session is already active somewhere else. "
                 "Stop the other instance first, then enter your session string again."
             ))
-        return render_template("index.html", error=result["error"])
+        error_text = result["error"]
+        if any(code in error_text for code in (
+            "SESSION_REVOKED", "USER_DEACTIVATED", "AUTH_KEY_UNREGISTERED"
+        )):
+            error_text = (
+                "Telegram has revoked or deactivated this session. "
+                "Generate a fresh session string from an active Telegram account and try again."
+            )
+        return render_template("index.html", error=error_text)
 
     # ── Persist session so it survives browser close & server restart ──────────
     try:
